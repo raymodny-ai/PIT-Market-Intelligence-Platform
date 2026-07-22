@@ -156,11 +156,41 @@ class SliceRequest(BaseModel):
 # =============================================================================
 
 
+# Panel manifest discovery accepts two on-disk layouts:
+#   1) flat:        {panels_dir}/{panel_id}_manifest.json        (CLI writes this)
+#   2) nested:      {panels_dir}/{panel_id}/panel_manifest.json   (legacy/manual)
+# Both paths resolve to the same JSON; we pick by mtime (newest wins).
+
+
+def _find_panel_manifest(panel_id: str | None = None) -> list[Path]:
+    """Return manifests matching panel_id (or all), newest first.
+
+    If panel_id is None, return all manifests (used by /panels/latest).
+    """
+    if _PANELS_DIR is None or not _PANELS_DIR.exists():
+        return []
+    if panel_id is None:
+        candidates = list(_PANELS_DIR.rglob("*manifest.json"))
+    else:
+        # Match both flat `{id}_manifest.json` and nested `{id}/panel_manifest.json`.
+        candidates = list(_PANELS_DIR.rglob(f"{panel_id}*manifest.json"))
+        # Also try the nested layout explicitly in case rglob above missed it.
+        candidates += list(_PANELS_DIR.rglob(f"{panel_id}/panel_manifest.json"))
+    # Deduplicate by resolved path.
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for c in candidates:
+        rp = c.resolve()
+        if rp not in seen:
+            seen.add(rp)
+            unique.append(c)
+    unique.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return unique
+
+
 @router.get("/panels/latest")
 def get_latest_panel() -> dict:
-    if _PANELS_DIR is None or not _PANELS_DIR.exists():
-        raise HTTPException(status_code=404, detail="No panels built yet")
-    manifests = sorted(_PANELS_DIR.rglob("panel_manifest.json"), reverse=True)
+    manifests = _find_panel_manifest()
     if not manifests:
         raise HTTPException(status_code=404, detail="No panels built yet")
     return json.loads(manifests[0].read_text(encoding="utf-8"))
@@ -170,7 +200,7 @@ def get_latest_panel() -> dict:
 def get_panel(panel_id: str) -> dict:
     if _PANELS_DIR is None:
         raise HTTPException(status_code=503, detail="Panels dir not configured")
-    matches = list(_PANELS_DIR.rglob(f"{panel_id}/panel_manifest.json"))
+    matches = _find_panel_manifest(panel_id)
     if not matches:
         raise HTTPException(status_code=404, detail=f"Panel not found: {panel_id}")
     return json.loads(matches[0].read_text(encoding="utf-8"))
@@ -184,7 +214,10 @@ def slice_panel(panel_id: str, req: SliceRequest) -> dict:
         req.validate_against_registry()
     except RegistryError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    panel_path = next(_PANELS_DIR.rglob(f"{panel_id}/value_panel.parquet"), None)
+    panel_path = next(_PANELS_DIR.rglob(f"{panel_id}*value_panel.parquet"), None)
+    if panel_path is None:
+        # Fall back to looking under a {panel_id}/ subdirectory (legacy layout).
+        panel_path = next(_PANELS_DIR.rglob(f"{panel_id}/value_panel.parquet"), None)
     if panel_path is None:
         raise HTTPException(status_code=404, detail=f"Panel not found: {panel_id}")
     df = pl.read_parquet(str(panel_path))
