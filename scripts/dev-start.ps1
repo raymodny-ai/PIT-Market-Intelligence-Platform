@@ -13,6 +13,29 @@ Set-Location $RepoRoot
 $logDir = Join-Path $RepoRoot "logs"
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
+# --- pre-clean: free target ports so we never hit "address in use" ---
+function Free-Port {
+  param([int]$Port)
+  $pids = Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction SilentlyContinue |
+    Select-Object -ExpandProperty OwningProcess -Unique
+  foreach ($id in $pids) {
+    Write-Host "  freeing port $Port (pid $id) ..." -ForegroundColor DarkYellow
+    Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+  }
+}
+Free-Port 8000
+Free-Port 3001
+# Also clean up any stale pid files pointing at dead processes
+foreach ($f in @("backend.pid","frontend.pid")) {
+  $p = Join-Path $logDir $f
+  if (Test-Path $p) {
+    $id = [int](Get-Content $p -Raw).Trim()
+    if ($id -gt 0 -and -not (Get-Process -Id $id -ErrorAction SilentlyContinue)) {
+      Remove-Item $p -Force
+    }
+  }
+}
+
 # --- env ---
 $env:PYTHONPATH      = "src"
 $env:PIT_CONFIG_DIR  = "config"
