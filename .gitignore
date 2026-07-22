@@ -40,7 +40,7 @@ data/raw/
 data/silver/
 data/gold/pit_panels/
 data/gold/reports/
-data/reports/backtests/
+data/reports/
 data/redis/
 data/minio/
 data/postgres/
