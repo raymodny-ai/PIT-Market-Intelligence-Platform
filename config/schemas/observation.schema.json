@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pit.market/schemas/observation.schema.json",
+  "title": "Silver Observations Bitemporal",
+  "description": "PRD §8.3 + v0.3 additions (fill_type enum, fill_source_observation_id, fill_lag_days, vendor_symbol).",
+  "type": "object",
+  "required": [
+    "observation_id",
+    "source_name",
+    "dataset_name",
+    "field_name",
+    "observation_time",
+    "available_at",
+    "valid_from",
+    "ingested_at",
+    "run_id",
+    "raw_record_hash",
+    "parser_version",
+    "quality_status",
+    "fill_type",
+    "canonical_symbol"
+  ],
+  "properties": {
+    "observation_id": { "type": "string", "format": "uuid" },
+    "source_name": {
+      "type": "string",
+      "enum": ["yfinance", "fred", "cftc", "finra", "sec", "cboe", "etf_issuer"]
+    },
+    "dataset_name": { "type": "string", "minLength": 1 },
+    "canonical_symbol": {
+      "type": ["string", "null"],
+      "description": "Discipline #8: must exist in Instrument Registry; UNMAPPED_SYMBOL otherwise"
+    },
+    "vendor_symbol": {
+      "type": ["string", "null"],
+      "description": "Original vendor identifier (088691, GLD, VIXCLS) preserved in source_metadata_json"
+    },
+    "field_name": { "type": "string", "minLength": 1 },
+    "value": { "type": ["number", "null"] },
+    "unit": { "type": ["string", "null"] },
+    "frequency": {
+      "type": "string",
+      "enum": ["daily", "weekly", "monthly", "quarterly", "event"]
+    },
+    "price_type": {
+      "type": "string",
+      "enum": ["RAW_CLOSE", "ADJ_CLOSE", "SPLIT_FACTOR", null]
+    },
+    "observation_time": { "type": "string", "format": "date-time" },
+    "observation_end_time": { "type": ["string", "null"], "format": "date-time" },
+    "release_time": { "type": ["string", "null"], "format": "date-time" },
+    "available_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Must be TIMESTAMPTZ, minute precision (discipline #8)"
+    },
+    "valid_from": { "type": "string", "format": "date-time" },
+    "valid_to": { "type": ["string", "null"], "format": "date-time" },
+    "ingested_at": { "type": "string", "format": "date-time" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "raw_record_hash": { "type": "string", "minLength": 1 },
+    "parser_version": { "type": "string", "minLength": 1 },
+    "source_url": { "type": ["string", "null"] },
+    "source_metadata_json": { "type": "object" },
+    "quality_status": {
+      "type": "string",
+      "enum": ["VALID", "DEGRADED", "STALE", "PARTIAL", "REJECTED", "INFERRED_AVAILABILITY", "SOURCE_FAILED", "SOURCE_THROTTLED"]
+    },
+    "quality_flags_json": { "type": "object" },
+    "fill_type": {
+      "type": "string",
+      "enum": ["OBSERVED", "FORWARD_FILLED", "CALENDAR_INFERRED", "INTERPOLATED"],
+      "default": "OBSERVED"
+    },
+    "fill_source_observation_id": {
+      "type": ["string", "null"],
+      "format": "uuid",
+      "description": "Required when fill_type != OBSERVED"
+    },
+    "fill_lag_days": { "type": ["integer", "null"], "minimum": 0 }
+  },
+  "allOf": [
+    {
+      "description": "fill_source_observation_id required when fill_type != OBSERVED",
+      "if": { "properties": { "fill_type": { "not": { "const": "OBSERVED" } } } },
+      "then": { "required": ["fill_source_observation_id"] }
+    }
+  ]
+}

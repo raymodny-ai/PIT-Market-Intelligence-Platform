@@ -1,0 +1,205 @@
+# =============================================================================
+# Metric Registry — Field definitions
+# Versioning: increment metric_registry_version on any change
+# v0.3: semantic_warning refined for FINRA total_volume (R-11)
+# v0.3: window_configs centralized, configuration_hash must cover window lengths
+# =============================================================================
+
+metric_registry_version: metrics.v1.0
+last_updated: 2026-07-21
+
+# ----- Window configuration (centralized; not hardcoded in features) -----
+# Per TODO T-08: window length changes must trigger feature_version bump
+window_configs:
+  short_term: 5
+  medium_term: 21
+  zscore_63d: 63
+  zscore_252d: 252
+  percentile_252d: 252
+  cot_lookback: 13         # ~1 quarter of weekly COT
+  short_flow_lookback: 21
+
+# ----- Availability rule references (full definitions in availability_rules.yaml) -----
+fields:
+  # ====== Price (yfinance) ======
+  - field_name: price__yf__close
+    display_name_zh: 收盘价
+    source_name: yfinance
+    dataset_name: daily_ohlcv
+    frequency: daily
+    unit: usd
+    availability_rule_id: yfinance_close_price
+    max_staleness: 2D
+    forward_fill_allowed: false
+    semantic_warning: yfinance 价格受股息/拆股调整,RAW_CLOSE 与 ADJ_CLOSE 区分
+    feature_definition_id: price_close.v1
+    price_type: RAW_CLOSE   # or ADJ_CLOSE / SPLIT_FACTOR
+
+  - field_name: price__yf__volume
+    display_name_zh: 成交量
+    source_name: yfinance
+    dataset_name: daily_ohlcv
+    frequency: daily
+    unit: shares
+    availability_rule_id: yfinance_close_price
+    max_staleness: 2D
+    forward_fill_allowed: false
+    semantic_warning: ""
+    feature_definition_id: price_volume.v1
+
+  - field_name: price__yf__return_1d
+    display_name_zh: 日收益率
+    source_name: yfinance
+    dataset_name: daily_ohlcv
+    frequency: daily
+    unit: ratio
+    availability_rule_id: yfinance_close_price
+    max_staleness: 2D
+    forward_fill_allowed: false
+    semantic_warning: 期货连续合约展期日收益应为 NaN,非真实收益
+    feature_definition_id: price_return_1d.v1
+    roll_adjusted_required: true
+
+  # ====== Flow (FINRA Reg SHO) ======
+  - field_name: flow__finra__short_volume
+    display_name_zh: FINRA 场外短卖成交量
+    source_name: finra
+    dataset_name: regsho_daily
+    frequency: daily
+    unit: shares
+    availability_rule_id: finra_regsho_t_plus_1_afternoon
+    max_staleness: 2D
+    forward_fill_allowed: false
+    semantic_warning: "short_volume 是 FINRA reporting venue 短卖成交量,不等同于 short interest 或净空头仓位"
+    feature_definition_id: short_volume.v1
+
+  - field_name: flow__finra__total_volume
+    display_name_zh: FINRA 场外总成交量
+    source_name: finra
+    dataset_name: regsho_daily
+    frequency: daily
+    unit: shares
+    availability_rule_id: finra_regsho_t_plus_1_afternoon
+    max_staleness: 2D
+    forward_fill_allowed: false
+    semantic_warning: "总成交量为 FINRA reporting venue 成交量,非全市场 consolidated volume,不得直接与 SIP tape 成交占比对比"
+    feature_definition_id: total_volume.v1
+
+  - field_name: flow__finra__short_ratio
+    display_name_zh: 短卖成交占比
+    source_name: finra
+    dataset_name: regsho_daily
+    frequency: daily
+    unit: ratio
+    availability_rule_id: finra_regsho_t_plus_1_afternoon
+    max_staleness: 2D
+    forward_fill_allowed: false
+    semantic_warning: "分母为 FINRA reporting venue 成交量,非全市场 consolidated volume;分子分母必须同源,不得混入其他数据源"
+    feature_definition_id: short_ratio.v1
+    requires_d_same_source: true   # discipline #8: multi-source denominator prohibition
+
+  - field_name: flow__finra__short_ratio__zscore__63d
+    display_name_zh: 短卖占比 63 日 Z-score
+    source_name: finra
+    dataset_name: regsho_daily
+    frequency: daily
+    unit: zscore
+    availability_rule_id: finra_regsho_t_plus_1_afternoon
+    max_staleness: 2D
+    forward_fill_allowed: true
+    semantic_warning: "周/月末附近 Z-score 受窗口边界影响较大"
+    feature_definition_id: short_ratio_zscore_63d.v1
+    window_config_ref: zscore_63d
+
+  # ====== Macro (FRED / ALFRED) ======
+  - field_name: macro__fred__dgs10
+    display_name_zh: 10 年期美债收益率
+    source_name: fred
+    dataset_name: DGS10
+    frequency: daily
+    unit: percent
+    availability_rule_id: fred_realtime_period
+    max_staleness: 5D
+    forward_fill_allowed: true
+    semantic_warning: FRED 数据为最新修订值;PIT 回测必须走 ALFRED 接口
+    feature_definition_id: dgs10.v1
+    requires_alfred: true
+
+  - field_name: macro__fred__vixcls
+    display_name_zh: VIX 收盘价(FRED 代理)
+    source_name: fred
+    dataset_name: VIXCLS
+    frequency: daily
+    unit: index
+    availability_rule_id: fred_market_proxy_t_plus_1
+    max_staleness: 3D
+    forward_fill_allowed: true
+    semantic_warning: FRED VIX 通常 T+1/T+2 更新,Panel 不得早用;实时数据走 Cboe CFE
+    feature_definition_id: vixcls.v1
+
+  - field_name: macro__fred__t10yie
+    display_name_zh: 10 年期盈亏平衡通胀率
+    source_name: fred
+    dataset_name: T10YIE
+    frequency: daily
+    unit: percent
+    availability_rule_id: fred_realtime_period
+    max_staleness: 5D
+    forward_fill_allowed: true
+    semantic_warning: ""
+    feature_definition_id: t10yie.v1
+    requires_alfred: true
+
+  # ====== Positioning (CFTC COT) ======
+  - field_name: position__cftc__managed_money_net
+    display_name_zh: 管理基金净持仓(Disaggregated COT)
+    source_name: cftc
+    dataset_name: disagg_cot
+    frequency: weekly
+    unit: contracts
+    availability_rule_id: cftc_friday_release
+    max_staleness: 10D
+    forward_fill_allowed: true
+    semantic_warning: 周度仓位数据,观察日为周二,发布日为周五 15:30 ET,不代表实时资金流
+    feature_definition_id: managed_money_net.v1
+    cot_report_type: DISAGGREGATED
+
+  - field_name: position__cftc__swap_dealer_net
+    display_name_zh: 互换商净持仓(Disaggregated COT)
+    source_name: cftc
+    dataset_name: disagg_cot
+    frequency: weekly
+    unit: contracts
+    availability_rule_id: cftc_friday_release
+    max_staleness: 10D
+    forward_fill_allowed: true
+    semantic_warning: ""
+    feature_definition_id: swap_dealer_net.v1
+    cot_report_type: DISAGGREGATED
+
+  - field_name: position__cftc__open_interest_all
+    display_name_zh: 总持仓量
+    source_name: cftc
+    dataset_name: disagg_cot
+    frequency: weekly
+    unit: contracts
+    availability_rule_id: cftc_friday_release
+    max_staleness: 10D
+    forward_fill_allowed: true
+    semantic_warning: ""
+    feature_definition_id: open_interest_all.v1
+    cot_report_type: DISAGGREGATED
+
+  # ====== ETF shares (P1) ======
+  - field_name: etf__shares_outstanding
+    display_name_zh: ETF 已发行份额
+    source_name: etf_issuer
+    dataset_name: daily_shares
+    frequency: daily
+    unit: shares
+    availability_rule_id: etf_shares_by_issuer   # routed by issuer in T-26
+    max_staleness: 2D
+    forward_fill_allowed: false
+    semantic_warning: "shares_outstanding 变化本质是 T 日的申赎流量,T+1 发布的值不可作为 T 日可知"
+    feature_definition_id: etf_shares.v1
+    requires_issuer_routing: true

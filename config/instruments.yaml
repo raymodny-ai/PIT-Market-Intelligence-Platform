@@ -1,0 +1,157 @@
+# =============================================================================
+# Instrument Registry — Phase 0 首期 12 个标的
+# Versioning: increment registry_version on any change
+# Field cot_report_type added per v0.3 review (CFTC routing)
+# =============================================================================
+
+registry_version: registry.v1.0
+last_updated: 2026-07-21
+
+instruments:
+  # ----- US ETFs -----
+  - canonical_symbol: SPY
+    asset_class: equity_etf
+    primary_market: NYSE_ARCA
+    vendor_symbol_yfinance: SPY
+    cftc_market_code: null
+    cot_report_type: null
+    issuer: state_street
+    related_etfs: []
+    timezone: America/New_York
+    display_name_zh: SPDR S&P 500 ETF
+    display_name_en: SPDR S&P 500 ETF Trust
+
+  - canonical_symbol: QQQ
+    asset_class: equity_etf
+    primary_market: NASDAQ
+    vendor_symbol_yfinance: QQQ
+    cftc_market_code: null
+    cot_report_type: null
+    issuer: invesco
+    related_etfs: []
+    timezone: America/New_York
+    display_name_zh: Invesco QQQ Trust
+    display_name_en: Invesco QQQ Trust
+
+  - canonical_symbol: IWM
+    asset_class: equity_etf
+    primary_market: NYSE_ARCA
+    vendor_symbol_yfinance: IWM
+    cftc_market_code: null
+    cot_report_type: null
+    issuer: blackrock
+    related_etfs: []
+    timezone: America/New_York
+    display_name_zh: iShares Russell 2000 ETF
+    display_name_en: iShares Russell 2000 ETF
+
+  # ----- Commodity ETFs -----
+  - canonical_symbol: GLD
+    asset_class: commodity_etf
+    primary_market: NYSE_ARCA
+    vendor_symbol_yfinance: GLD
+    cftc_market_code: "088691"   # Gold COMEX
+    cot_report_type: DISAGGREGATED
+    issuer: state_street
+    related_etfs: [GLD, IAU]
+    timezone: America/New_York
+    display_name_zh: SPDR Gold Shares
+    display_name_en: SPDR Gold Shares
+
+  - canonical_symbol: IAU
+    asset_class: commodity_etf
+    primary_market: NYSE_ARCA
+    vendor_symbol_yfinance: IAU
+    cftc_market_code: "088691"
+    cot_report_type: DISAGGREGATED
+    issuer: blackrock
+    related_etfs: [GLD, IAU]
+    timezone: America/New_York
+    display_name_zh: iShares Gold Trust
+    display_name_en: iShares Gold Trust
+
+  - canonical_symbol: SLV
+    asset_class: commodity_etf
+    primary_market: NYSE_ARCA
+    vendor_symbol_yfinance: SLV
+    cftc_market_code: "084691"   # Silver COMEX
+    cot_report_type: DISAGGREGATED
+    issuer: state_street
+    related_etfs: [SLV]
+    timezone: America/New_York
+    display_name_zh: iShares Silver Trust
+    display_name_en: iShares Silver Trust
+
+  # ----- Futures (continuous front-month via yfinance) -----
+  - canonical_symbol: GC=F
+    asset_class: commodity_future
+    primary_market: COMEX
+    vendor_symbol_yfinance: GC=F
+    cftc_market_code: "088691"
+    cot_report_type: DISAGGREGATED
+    issuer: null
+    related_etfs: [GLD, IAU]
+    timezone: America/New_York
+    display_name_zh: 黄金期货连续合约
+    display_name_en: Gold Continuous Front-Month Future
+
+  - canonical_symbol: SI=F
+    asset_class: commodity_future
+    primary_market: COMEX
+    vendor_symbol_yfinance: SI=F
+    cftc_market_code: "084691"
+    cot_report_type: DISAGGREGATED
+    issuer: null
+    related_etfs: [SLV]
+    timezone: America/New_York
+    display_name_zh: 白银期货连续合约
+    display_name_en: Silver Continuous Front-Month Future
+
+  - canonical_symbol: GOLD_COMEX
+    asset_class: commodity_future
+    primary_market: COMEX
+    vendor_symbol_yfinance: GC=F
+    cftc_market_code: "088691"
+    cot_report_type: DISAGGREGATED
+    issuer: null
+    related_etfs: [GLD, IAU]
+    timezone: America/New_York
+    display_name_zh: 黄金 COMEX 期货(CFTC 标的键)
+    display_name_en: Gold COMEX Future (CFTC key)
+
+  - canonical_symbol: SILVER_COMEX
+    asset_class: commodity_future
+    primary_market: COMEX
+    vendor_symbol_yfinance: SI=F
+    cftc_market_code: "084691"
+    cot_report_type: DISAGGREGATED
+    issuer: null
+    related_etfs: [SLV]
+    timezone: America/New_York
+    display_name_zh: 白银 COMEX 期货(CFTC 标的键)
+    display_name_en: Silver COMEX Future (CFTC key)
+
+  # ----- Volatility indices -----
+  - canonical_symbol: VIX
+    asset_class: volatility_index
+    primary_market: CBOE
+    vendor_symbol_yfinance: ^VIX
+    cftc_market_code: null
+    cot_report_type: null
+    issuer: cboe
+    related_etfs: [VXX, UVXY]
+    timezone: America/New_York
+    display_name_zh: CBOE 波动率指数
+    display_name_en: CBOE Volatility Index
+
+  - canonical_symbol: VXN
+    asset_class: volatility_index
+    primary_market: NASDAQ
+    vendor_symbol_yfinance: ^VXN
+    cftc_market_code: null
+    cot_report_type: null
+    issuer: nasdaq
+    related_etfs: []
+    timezone: America/New_York
+    display_name_zh: NASDAQ-100 波动率指数
+    display_name_en: CBOE NASDAQ-100 Volatility Index

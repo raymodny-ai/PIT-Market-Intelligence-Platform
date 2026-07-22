@@ -1,0 +1,92 @@
+# =============================================================================
+# Availability Rules — PIT 可得时间解析
+# Per TODO T-07: 5-level priority (release_time > calendar > conservative > file > fetch)
+# v0.3 refinements: TIMESTAMPTZ precision mandatory, DST safe
+# =============================================================================
+
+availability_rules_version: availability.v1.0
+last_updated: 2026-07-21
+
+rules:
+  # ----- yfinance -----
+  yfinance_close_price:
+    description: Yahoo Finance daily OHLCV, post-close final price
+    observation_time_et: "16:00"          # 收盘时间
+    available_at_offset_hours: 2         # 收盘后 2h (T 日 18:00 ET),等复权因子稳定
+    timezone: America/New_York
+    timezone_aware: true
+    fallback: next_business_day
+    calendar_guard: true                  # 非交易日禁止写入
+
+  yfinance_realtime_1605_ET:
+    description: Yahoo Finance delayed quote, used at 1605 ET decision clock
+    observation_time_et: "16:05"
+    available_at_offset_hours: 0          # 即时
+    timezone: America/New_York
+    timezone_aware: true
+    calendar_guard: true
+
+  # ----- FRED / ALFRED -----
+  fred_realtime_period:
+    description: FRED series via ALFRED, supports vintage queries
+    uses_alfred: true                     # discipline #8: must call ALFRED
+    realtime_start_required: true         # request must include realtime_start
+    fallback: next_business_day
+
+  fred_market_proxy_t_plus_1:
+    description: FRED proxy of market data (VIXCLS, DGS10 etc.) — T+1/T+2 release
+    uses_alfred: true
+    realtime_start_required: true
+    observation_to_release_lag_days: 1
+    release_hour_et: "18:00"
+    timezone: America/New_York
+    timezone_aware: true
+    fallback: next_business_day
+    note: "FRED VIX 来自 CBOE 但更新节奏慢于 Cboe 官方;实时数据走 cboe_cfe adapter"
+
+  # ----- CFTC COT (v0.3 expanded per TODO T-05c) -----
+  cftc_friday_release:
+    description: CFTC weekly COT, observation Tuesday close, release Friday 15:30 ET
+    observation_day_of_week: TUESDAY
+    observation_time_utc: "21:00"         # 周二收盘(美东 16:00 + DST)
+    release_day_of_week: FRIDAY
+    release_time_et: "15:30"              # 关键: 15:30 而非 00:00
+    timezone: America/New_York
+    timezone_aware: true                  # EDT/EST 自动切换
+    lag_days: 3
+    fallback: next_business_day           # 节假日顺延
+    precision: minute                     # available_at 必须 TIMESTAMPTZ 精确到分钟
+
+  # ----- FINRA Reg SHO (v0.3 renamed per TODO T-05d) -----
+  finra_regsho_t_plus_1_afternoon:
+    description: FINRA Reg SHO daily, T+1 afternoon release
+    observation_to_release_lag_business_days: 1
+    release_hour_et: "14:00"              # T+1 14:00 ET (保守)
+    timezone: America/New_York
+    timezone_aware: true
+    fallback: next_business_day
+    max_staleness: 2D
+    note: "NYSE Arca 部分 T+2 才出现,故取 T+1 14:00 保守估计"
+
+  # ----- SEC EDGAR (v0.3 per TODO T-26) -----
+  sec_edgar_filing_acceptance:
+    description: SEC EDGAR — use acceptancedatetime as available_at
+    source_field: acceptancedatetime       # NOT periodOfReport
+    fallback: filing_date                  # 缺失时回落
+    fallback_quality_status: INFERRED_AVAILABILITY
+    timezone: America/New_York
+    timezone_aware: true
+
+  # ----- ETF issuer websites (v0.3 per TODO T-26) -----
+  etf_shares_by_issuer:
+    description: ETF shares outstanding, routed by issuer
+    routes:
+      state_street:                        # GLD, SLV
+        release_offset_hours: 22          # T+1 10:00 ET
+      blackrock:                           # IAU, IWM
+        release_offset_hours: 4           # T 日 20:00 ET
+      invesco:                             # QQQ
+        release_offset_hours: 18
+    timezone: America/New_York
+    timezone_aware: true
+    note: "shares_outstanding 变化本质是 T 日申赎流量,T+1 发布的值不可作为 T 日可知"

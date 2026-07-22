@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pit.market/schemas/llm_analysis.schema.json",
+  "title": "LLM Structured Analysis (Finding)",
+  "description": "PRD §16.2 + v0.3 limitations propagation (discipline #7).",
+  "type": "object",
+  "required": [
+    "finding_id",
+    "title_zh",
+    "claim_zh",
+    "classification",
+    "support_type",
+    "causal_language_level",
+    "llm_confidence",
+    "final_confidence",
+    "evidence_ids",
+    "limitations_zh"
+  ],
+  "properties": {
+    "finding_id": { "type": "string", "minLength": 1 },
+    "title_zh": { "type": "string", "minLength": 1 },
+    "claim_zh": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Use ASSOCIATIVE_ONLY language: '可能', '一致于', '需要确认' (PRD §4.4)"
+    },
+    "classification": {
+      "type": "string",
+      "enum": [
+        "RISK_WARNING",
+        "FLOW_CONFIRMATION",
+        "POSITIONING_EXTREME",
+        "MACRO_REGIME",
+        "VOLATILITY_REGIME",
+        "DATA_QUALITY_ISSUE"
+      ]
+    },
+    "support_type": {
+      "type": "string",
+      "enum": ["SINGLE_FACTOR", "MULTI_FACTOR_CONFIRMATION", "REVISION", "NO_EVIDENCE"]
+    },
+    "causal_language_level": {
+      "type": "string",
+      "enum": ["ASSOCIATIVE_ONLY", "DESCRIPTIVE"],
+      "default": "ASSOCIATIVE_ONLY"
+    },
+    "llm_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "final_confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "After evidence/PIT/quality caps (T-22 rule 5)"
+    },
+    "evidence_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "limitations_zh": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Must include semantic_caveat_zh propagated from each evidence (discipline #7)"
+    },
+    "model": { "type": "string" },
+    "prompt_version": { "type": "string" }
+  },
+  "allOf": [
+    {
+      "description": "Risk/direction findings require ≥ 2 different-domain evidence (T-22 rule 2)",
+      "if": {
+        "properties": {
+          "classification": { "enum": ["RISK_WARNING", "FLOW_CONFIRMATION", "MACRO_REGIME"] }
+        }
+      },
+      "then": { "properties": { "evidence_ids": { "minItems": 2 } } }
+    }
+  ]
+}

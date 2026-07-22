@@ -1,0 +1,45 @@
+# =============================================================================
+# PIT Market Intelligence — Global settings
+# =============================================================================
+
+app:
+  name: pit-market
+  version: 0.1.0
+  env: ${PIT_ENV:-development}
+
+paths:
+  config_dir: ${PIT_CONFIG_DIR:-./config}
+  raw: ${RAW_DATA_DIR:-./data/raw}
+  silver: ${SILVER_DATA_DIR:-./data/silver}
+  gold: ${GOLD_DATA_DIR:-./data/gold}
+  metadata: ${METADATA_DIR:-./data/metadata}
+  reports: ${REPORTS_DIR:-./data/reports}
+  duckdb: ${DUCKDB_PATH:-./data/pit.duckdb}
+
+logging:
+  level: ${PIT_LOG_LEVEL:-INFO}
+  json: false  # set true in production for structured logs
+
+# Phase 2 in-process cache; Phase 5 migrates to redis
+cache:
+  backend: ${CACHE_BACKEND:-cachetools}
+  ttl_sec: ${CACHE_TTL_SEC:-900}
+  redis_url: ${REDIS_URL:-redis://localhost:6379/0}
+
+# PIT discipline enforcers (纪律 #8)
+pit:
+  # available_at must be TIMESTAMPTZ, not date
+  require_timestamp_tz: true
+  # ALFRED must be used for FRED data
+  require_alfred_for_fred: true
+  # canonical_symbol must exist in Instrument Registry
+  enforce_canonical_symbol: true
+  # Reject unlabeled fills
+  require_fill_type: true
+
+# Default decision clocks
+decision_clocks:
+  default: "1805_ET"  # post-close, conservative
+  available:
+    - "1605_ET"
+    - "1805_ET"

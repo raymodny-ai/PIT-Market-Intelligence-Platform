@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pit.market/schemas/api_slice.schema.json",
+  "title": "Slice Request",
+  "description": "PRD §11.1 — all field_names must validate against metric_registry.",
+  "type": "object",
+  "required": ["universe"],
+  "properties": {
+    "panel_id": { "type": ["string", "null"] },
+    "as_of": { "type": ["string", "null"], "format": "date-time" },
+    "decision_clock": {
+      "type": "string",
+      "enum": ["1605_ET", "1805_ET"],
+      "default": "1805_ET"
+    },
+    "universe": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Canonical symbols; must exist in Instrument Registry"
+    },
+    "date_range": {
+      "type": "object",
+      "properties": {
+        "start": { "type": "string", "format": "date" },
+        "end": { "type": "string", "format": "date" }
+      },
+      "required": ["start", "end"]
+    },
+    "domains": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["price", "position", "flow", "otc", "macro", "volatility", "quality"]
+      }
+    },
+    "fields": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Whitelist-validated against metric_registry"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["yfinance", "fred", "cftc", "finra", "sec", "cboe", "etf_issuer"]
+      }
+    },
+    "frequencies": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["daily", "weekly", "monthly", "quarterly", "event"]
+      }
+    },
+    "states": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "LOW_EXTREME", "LOW", "NEUTRAL", "HIGH", "HIGH_EXTREME",
+          "MISSING", "STALE", "INFERRED_AVAILABILITY"
+        ]
+      }
+    },
+    "quality": {
+      "type": "object",
+      "properties": {
+        "min_score": { "type": "number", "minimum": 0, "maximum": 1 },
+        "include_stale": { "type": "boolean", "default": false },
+        "include_inferred_availability": { "type": "boolean", "default": false }
+      }
+    },
+    "aggregation": {
+      "type": "object",
+      "properties": {
+        "time": { "type": "string", "enum": ["raw", "daily", "weekly", "monthly"] },
+        "cross_section": { "type": "string", "enum": ["none", "mean", "median", "rank"] }
+      }
+    },
+    "sort": {
+      "type": "object",
+      "properties": {
+        "field": { "type": "string" },
+        "direction": { "type": "string", "enum": ["asc", "desc"] }
+      },
+      "required": ["field", "direction"]
+    },
+    "page": {
+      "type": "object",
+      "properties": {
+        "offset": { "type": "integer", "minimum": 0 },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 500 }
+      },
+      "required": ["offset", "limit"]
+    }
+  }
+}

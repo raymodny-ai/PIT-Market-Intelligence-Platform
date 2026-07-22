@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pit.market/schemas/ui_view_state.schema.json",
+  "title": "UI View State (SliceStore)",
+  "description": "PRD §11.2 — global slice state synced to URL.",
+  "type": "object",
+  "required": [
+    "active_panel_id",
+    "decision_time",
+    "decision_clock",
+    "selected_symbols",
+    "date_range",
+    "view_mode"
+  ],
+  "properties": {
+    "active_panel_id": {
+      "type": "string",
+      "description": "'latest' or a specific panel_id; frozen reports must not change this"
+    },
+    "decision_time": { "type": "string", "format": "date-time" },
+    "decision_clock": {
+      "type": "string",
+      "enum": ["1605_ET", "1805_ET"]
+    },
+    "selected_symbols": { "type": "array", "items": { "type": "string" } },
+    "selected_domains": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["price", "position", "flow", "otc", "macro", "volatility", "quality"] }
+    },
+    "selected_fields": { "type": "array", "items": { "type": "string" } },
+    "selected_sources": { "type": "array", "items": { "type": "string" } },
+    "selected_states": { "type": "array", "items": { "type": "string" } },
+    "date_range": {
+      "type": "object",
+      "properties": {
+        "start": { "type": "string", "format": "date" },
+        "end": { "type": "string", "format": "date" }
+      },
+      "required": ["start", "end"]
+    },
+    "include_stale": { "type": "boolean", "default": false },
+    "include_inferred_availability": { "type": "boolean", "default": false },
+    "selected_evidence_ids": { "type": "array", "items": { "type": "string" } },
+    "selected_finding_ids": { "type": "array", "items": { "type": "string" } },
+    "selected_chart_points": { "type": "array", "items": { "type": "object" } },
+    "view_mode": {
+      "type": "string",
+      "enum": ["overview", "research", "replay", "audit"]
+    }
+  }
+}

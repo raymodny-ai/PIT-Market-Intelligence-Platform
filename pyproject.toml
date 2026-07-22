@@ -1,0 +1,164 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pit-market"
+version = "0.1.0"
+description = "PIT Market Intelligence Platform — auditable point-in-time data warehouse with evidence-traced LLM analysis"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "PIT Market Intelligence Team" }]
+
+dependencies = [
+    # Orchestration
+    "dagster>=1.6",
+    "dagster-webserver>=1.6",
+    # Storage
+    "duckdb>=0.10",
+    "pyarrow>=15",
+    "polars>=0.20",
+    "pandas>=2.2",
+    # Data validation
+    "pandera>=0.18",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+    # Backend API
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "python-multipart>=0.0.9",
+    # HTTP / retry
+    "httpx>=0.27",
+    "tenacity>=8.2",
+    # Calendar
+    "exchange-calendars>=4.5",
+    # Config / logging
+    "PyYAML>=6.0",
+    "structlog>=24.1",
+    "python-dotenv>=1.0",
+    # Caching (Phase 2 in-process; Phase 5 migrates to Redis)
+    "cachetools>=5.3",
+    "redis>=5.0",  # T-31 Redis cache backend
+    # CLI (Phase 5 T-32)
+    "typer>=0.12",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.1",
+    "ruff>=0.4",
+    "mypy>=1.10",
+    "types-PyYAML",
+    "types-python-dateutil",
+    "respx>=0.21",  # HTTP mocking for adapters
+    "freezegun>=1.4",  # Time control in tests
+    "scikit-learn>=1.4",  # linear baseline for backtest engine
+    "fakeredis>=2.20",  # Redis cache backend testing
+]
+etl = [
+    "yfinance>=0.2.40",
+    "rapidfuzz>=3.9",  # for fuzzy symbol matching in adapters
+]
+llm = [
+    "openai>=1.30",
+    "google-generativeai>=0.5",  # optional
+]
+research = [
+    "xgboost>=2.0",   # T-30 walk-forward backtest
+    "optuna>=3.6",    # T-30 Bayesian hyperparameter search
+]
+
+[project.scripts]
+pit-market = "pit_market.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"pit_market" = ["py.typed"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["data/**", "frontend/**", "*.egg-info/**"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501",  # line too long (handled by formatter)
+    "B008",  # do not perform function calls in argument defaults (FastAPI uses this pattern)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"]  # allow assert in tests
+
+[tool.mypy]
+python_version = "3.12"
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = false  # progressive typing
+no_implicit_optional = true
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = ["data/", "frontend/", "build/", "dist/"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--showlocals",
+    "--tb=short",
+]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests requiring external services",
+    "pit_leakage: marks PIT anti-leakage tests (T-12)",
+    "adversarial: marks Verifier-provided adversarial cases",
+]
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning:botocore.*",
+    "ignore::DeprecationWarning:exchange_calendars.*",
+    "ignore::PendingDeprecationWarning",  # python_multipart, fastapi internals
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore::DeprecationWarning:fastapi.*",
+    "ignore::starlette.exceptions.StarletteDeprecationWarning",  # httpx vs httpx2 nag
+    "ignore::DeprecationWarning:pandera.*",
+    "ignore::DeprecationWarning:polars.*",
+    "ignore::DeprecationWarning:redis.*",
+    "ignore::DeprecationWarning:fakeredis.*",
+]
+
+[tool.coverage.run]
+source = ["src/pit_market"]
+omit = ["*/tests/*", "*/__main__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

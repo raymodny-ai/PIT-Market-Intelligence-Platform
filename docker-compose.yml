@@ -1,0 +1,158 @@
+# =============================================================================
+# PIT Market Intelligence Platform — Docker Compose (T-31)
+# Phase 5: full prod stack — Dagster + FastAPI + Redis + MinIO + PostgreSQL
+# =============================================================================
+# Bring up:    docker compose up -d
+# Verify:      docker compose ps
+# Teardown:    docker compose down -v
+# =============================================================================
+
+x-pit-env: &pit-env
+  PIT_CONFIG_DIR: /opt/pit/app/config
+  PIT_MARKET_DATA: /opt/pit/app/data
+  PIT_MARKET_CACHE_BACKEND: redis
+  PIT_MARKET_REDIS_URL: redis://redis:6379/0
+  PIT_MARKET_S3_ENDPOINT: http://minio:9000
+  PIT_MARKET_S3_ACCESS_KEY: pit
+  PIT_MARKET_S3_SECRET_KEY: pit-dev-password
+  PIT_MARKET_S3_BUCKET_RAW: pit-raw
+  PIT_MARKET_S3_BUCKET_SILVER: pit-silver
+  PIT_MARKET_POSTGRES_DSN: postgresql://pit:pit-dev-password@postgres:5432/pit_metadata
+  PIT_MARKET_FEISHU_WEBHOOK: ${PIT_MARKET_FEISHU_WEBHOOK:-}
+
+services:
+  # --- Core API ---
+  pit-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    image: pit-market/api:latest
+    container_name: pit-api
+    command: ["uvicorn", "pit_market.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *pit-env
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/opt/pit/app/config:ro
+      - ./data:/opt/pit/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # --- Orchestration ---
+  dagster-daemon:
+    image: ghcr.io/dagster-io/dagster-cloud-agent:latest
+    container_name: pit-dagster-daemon
+    command: ["dagster-daemon", "run"]
+    environment:
+      <<: *pit-env
+      DAGSTER_HOME: /opt/dagster/dagster_home
+    volumes:
+      - ./config:/opt/pit/app/config:ro
+      - ./data:/opt/pit/app/data
+    working_dir: /opt/pit/app
+    depends_on:
+      - pit-api
+    restart: unless-stopped
+
+  dagster-webserver:
+    image: ghcr.io/dagster-io/dagster-cloud-agent:latest
+    container_name: pit-dagster-webserver
+    command: ["dagster-webserver", "-h", "0.0.0.0", "-p", "3000"]
+    environment:
+      <<: *pit-env
+      DAGSTER_HOME: /opt/dagster/dagster_home
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config:/opt/pit/app/config:ro
+      - ./data:/opt/pit/app/data
+    working_dir: /opt/pit/app
+    depends_on:
+      - dagster-daemon
+    restart: unless-stopped
+
+  # --- Caching ---
+  redis:
+    image: redis:7-alpine
+    container_name: pit-redis
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # --- Object storage (Raw + Silver + Gold Parquet) ---
+  minio:
+    image: minio/minio:latest
+    container_name: pit-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: pit
+      MINIO_ROOT_PASSWORD: pit-dev-password
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./data/minio:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  minio-bootstrap:
+    image: minio/mc:latest
+    container_name: pit-minio-bootstrap
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set local http://minio:9000 pit pit-dev-password;
+      mc mb --ignore-existing local/pit-raw;
+      mc mb --ignore-existing local/pit-silver;
+      mc mb --ignore-existing local/pit-gold;
+      mc anonymous set none local/pit-raw;
+      mc anonymous set none local/pit-silver;
+      mc anonymous set none local/pit-gold;
+      echo 'MinIO buckets ready';
+      "
+
+  # --- Metadata DB ---
+  postgres:
+    image: postgres:16-alpine
+    container_name: pit-postgres
+    environment:
+      POSTGRES_USER: pit
+      POSTGRES_PASSWORD: pit-dev-password
+      POSTGRES_DB: pit_metadata
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pit -d pit_metadata"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped

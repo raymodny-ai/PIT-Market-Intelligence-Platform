@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pit.market/schemas/LLMProvenanceRunFacet.json",
+  "title": "LLM Provenance Run Facet (OpenLineage custom facet)",
+  "description": "Custom OpenLineage facet capturing LLM analysis provenance (TODO T-28).",
+  "type": "object",
+  "required": ["_producer", "_schemaURL", "model", "prompt_version", "schema_version", "validation_status"],
+  "properties": {
+    "_producer": { "type": "string", "const": "pit-market" },
+    "_schemaURL": {
+      "type": "string",
+      "const": "https://pit.market/schemas/LLMProvenanceRunFacet.json"
+    },
+    "model": { "type": "string", "description": "Provider/model id (e.g. openai/gpt-4o)" },
+    "prompt_version": { "type": "string" },
+    "schema_version": { "type": "string" },
+    "validation_status": {
+      "type": "string",
+      "enum": ["VALIDATED", "REJECTED", "PENDING"]
+    },
+    "validation_reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "evidence_catalog_id": { "type": "string" },
+    "evidence_count": { "type": "integer", "minimum": 0 },
+    "llm_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "final_confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "support_type": {
+      "type": "string",
+      "enum": ["SINGLE_FACTOR", "MULTI_FACTOR_CONFIRMATION", "REVISION", "NO_EVIDENCE"]
+    },
+    "causal_language_level": {
+      "type": "string",
+      "enum": ["ASSOCIATIVE_ONLY", "DESCRIPTIVE"]
+    }
+  }
+}

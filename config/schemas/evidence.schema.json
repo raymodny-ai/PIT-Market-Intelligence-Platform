@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pit.market/schemas/evidence.schema.json",
+  "title": "Evidence Catalog Entry",
+  "description": "PRD §16.1",
+  "type": "object",
+  "required": [
+    "evidence_id",
+    "symbol",
+    "field_name",
+    "display_name_zh",
+    "value",
+    "unit",
+    "state",
+    "observation_time",
+    "available_at",
+    "age_hours",
+    "source_name",
+    "dataset_name",
+    "feature_observation_id",
+    "normalized_observation_id",
+    "raw_record_hash",
+    "feature_definition_id",
+    "quality_status",
+    "semantic_caveat_zh"
+  ],
+  "properties": {
+    "evidence_id": { "type": "string", "minLength": 1 },
+    "symbol": { "type": "string", "minLength": 1 },
+    "field_name": { "type": "string", "minLength": 1 },
+    "display_name_zh": { "type": "string", "minLength": 1 },
+    "value": { "type": "number" },
+    "unit": { "type": "string", "minLength": 1 },
+    "state": {
+      "type": "string",
+      "enum": ["LOW_EXTREME", "LOW", "NEUTRAL", "HIGH", "HIGH_EXTREME", "MISSING", "STALE", "INFERRED_AVAILABILITY"]
+    },
+    "observation_time": { "type": "string", "format": "date-time" },
+    "available_at": { "type": "string", "format": "date-time" },
+    "age_hours": { "type": "number", "minimum": 0 },
+    "source_name": { "type": "string", "minLength": 1 },
+    "dataset_name": { "type": "string", "minLength": 1 },
+    "feature_observation_id": { "type": "string", "minLength": 1 },
+    "normalized_observation_id": { "type": "string", "minLength": 1 },
+    "raw_record_hash": { "type": "string", "minLength": 1 },
+    "feature_definition_id": { "type": "string", "minLength": 1 },
+    "quality_status": {
+      "type": "string",
+      "enum": ["VALID", "DEGRADED", "STALE", "PARTIAL", "REJECTED", "INFERRED_AVAILABILITY"]
+    },
+    "semantic_caveat_zh": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Discipline #7: must propagate source semantic_warning to LLM"
+    }
+  }
+}
