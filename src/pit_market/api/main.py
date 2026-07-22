@@ -53,6 +53,32 @@ app.include_router(lineage_api.router)
 # -----------------------------------------------------------------------------
 
 
+@app.get("/")
+def root() -> dict:
+    """API entry — list documented endpoints for the human eye / curl explorers."""
+    return {
+        "service": "PIT Market Intelligence API",
+        "version": __version__,
+        "endpoints": {
+            "health": "GET /health",
+            "openapi": "GET /openapi.json",
+            "docs": "GET /docs (Swagger UI)",
+            "instruments": "GET /v1/instruments/registry",
+            "metrics": "GET /v1/metrics/registry",
+            "panels_latest": "GET /v1/panels/latest",
+            "panel_slice": "POST /v1/panels/{panel_id}/slice",
+            "panel_replay": "POST /v1/panels/replay",
+            "analyses_start": "POST /v1/analyses",
+            "analyses_stream": "GET /v1/analyses/{run_id}/stream",
+            "lineage": "GET /v1/lineage/{entity_id}",
+            "lineage_facet": "GET /v1/lineage/analysis/{run_id}/facet",
+            "sources_status": "GET /v1/sources/status",
+            "source_events": "GET /v1/sources/{source_name}/events",
+            "export": "GET /v1/export/panels/{panel_id}",
+        },
+    }
+
+
 @app.get("/health")
 def health() -> dict:
     return {
