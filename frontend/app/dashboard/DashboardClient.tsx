@@ -6,6 +6,7 @@
 // URL ↔ sliceStore sync via useUrlState.
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { PITContextBar } from "../../components/PITContextBar";
@@ -36,6 +37,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
 export default function DashboardClient() {
   useUrlState();
+  const router = useRouter();
   const slice = useSliceStore();
   const openRawHash = useSelectionStore((s) => s.openRawHash);
   const startRun = useReportStore((s) => s.startRun);
@@ -79,7 +81,10 @@ export default function DashboardClient() {
 
   const handleAnalyze = async () => {
     if (!effectivePanelId) {
-      alert("请先选择一个 panel(右上角切换 panel_id)");
+      // No panel resolved — redirect to /panels/latest so the user lands on a
+      // real panel route. The switcher in PITContextBar is the persistent
+      // way to pick a specific panel.
+      router.push("/panels/latest");
       return;
     }
     try {

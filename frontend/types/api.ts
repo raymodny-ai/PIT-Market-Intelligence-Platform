@@ -104,8 +104,44 @@ export const PanelSummary = z.object({
   instrument_registry_version: z.string().optional(),
   metric_registry_version: z.string().optional(),
   registry_hash: z.string().optional(),
+  // List endpoint may attach filesystem metadata (relative to panels_dir).
+  _path: z.string().optional(),
+  _mtime_utc: z.string().optional(),
+  _size_bytes: z.number().int().nonnegative().optional(),
 });
 export type PanelSummary = z.infer<typeof PanelSummary>;
+
+export const PanelList = z.object({
+  panels: z.array(PanelSummary),
+  count: z.number().int().nonnegative(),
+});
+export type PanelList = z.infer<typeof PanelList>;
+
+// PanelListEntry — what /v1/panels actually returns per item.
+// Manifest-shaped (raw on-disk fields) + filesystem metadata, not the
+// resolved PanelSummary shape. Use PanelSummary only for /latest and
+// /v1/panels/{id} responses.
+export const PanelListEntry = z.object({
+  panel_id: z.string(),
+  decision_time_utc: z.string().optional(),
+  decision_clock: z.string().optional(),
+  universe: z.array(z.string()).optional(),
+  registry_hash: z.string().optional(),
+  feature_version: z.string().optional(),
+  metric_registry_version: z.string().optional(),
+  instrument_registry_version: z.string().optional(),
+  // Filesystem metadata attached by /v1/panels.
+  _path: z.string().optional(),
+  _mtime_utc: z.string().optional(),
+  _size_bytes: z.number().int().nonnegative().optional(),
+});
+export type PanelListEntry = z.infer<typeof PanelListEntry>;
+
+export const PanelListResponse = z.object({
+  panels: z.array(PanelListEntry),
+  count: z.number().int().nonnegative(),
+});
+export type PanelListResponse = z.infer<typeof PanelListResponse>;
 
 // -----------------------------------------------------------------
 // AG Grid table (PIT panel wide-table)

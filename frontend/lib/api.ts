@@ -18,6 +18,9 @@ import {
   LineageGraph as LineageGraphSchema,
   type SourceHealthMatrix,
   SourceHealthMatrix as SourceHealthMatrixSchema,
+  type PanelListResponse,
+  PanelListResponse as PanelListResponseSchema,
+  type PanelListEntry,
   type LLMProvenanceRunFacet,
   LLMProvenanceRunFacet as LLMProvenanceRunFacetSchema,
   type RevisionTimeline,
@@ -91,6 +94,12 @@ export async function fetchMetrics(): Promise<{ field_name: string; display_name
     semantic_warning: m.semantic_warning,
     domain: m.domain ?? "price_volume",
   }));
+}
+
+export async function fetchPanelsList(): Promise<PanelListResponse | null> {
+  const r = await getJson<any>("/v1/panels");
+  if (!r) return null;
+  return validated(PanelListResponseSchema, r, { panels: [], count: 0 });
 }
 
 export async function fetchPanelLatest(): Promise<PanelSummary | null> {

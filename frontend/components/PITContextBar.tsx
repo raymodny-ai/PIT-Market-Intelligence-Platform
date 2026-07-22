@@ -7,6 +7,7 @@
 import { useState } from "react";
 import { useSliceStore } from "../stores/sliceStore";
 import { useReportStore } from "../stores/reportStore";
+import { PanelSwitcher } from "./PanelSwitcher";
 import { formatTimestamp, dataAgeHuman, qualityPill } from "../lib/formatting";
 import type { QualityStatus } from "../types/api";
 
@@ -105,10 +106,12 @@ export function PITContextBar(props: PITContextBarProps) {
           </>
         )}
 
+        <PanelSwitcher currentPanelId={panelId} className="ml-2" />
+
         <button
           type="button"
           onClick={props.onSaveSnapshot}
-          className="btn-ghost ml-2"
+          className="btn-ghost ml-1"
         >
           <SaveIcon /> 另存为快照
         </button>

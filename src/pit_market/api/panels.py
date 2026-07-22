@@ -1,6 +1,7 @@
 """PIT Panel & Slice API endpoints (TODO T-10 / T-14).
 
 Endpoints:
+- GET  /v1/panels                  (list all manifests — used by PanelSwitcher)
 - GET  /v1/panels/latest
 - GET  /v1/panels/{panel_id}
 - POST /v1/panels/{panel_id}/slice
@@ -17,6 +18,7 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -186,6 +188,31 @@ def _find_panel_manifest(panel_id: str | None = None) -> list[Path]:
             unique.append(c)
     unique.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return unique
+
+
+@router.get("/panels")
+def list_panels() -> dict:
+    """List all panel manifests (newest first).
+
+    Used by the frontend PanelSwitcher to populate its dropdown. Skips files
+    that fail to parse so a single bad manifest doesn't break the listing.
+    """
+    if _PANELS_DIR is None or not _PANELS_DIR.exists():
+        return {"panels": [], "count": 0}
+    manifests = _find_panel_manifest()
+    out = []
+    for path in manifests:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            # Attach filesystem metadata so the UI can show file mtime/size.
+            stat = path.stat()
+            data["_path"] = str(path.relative_to(_PANELS_DIR))
+            data["_mtime_utc"] = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
+            data["_size_bytes"] = stat.st_size
+            out.append(data)
+        except Exception:  # noqa: BLE001 — surface count but skip the bad one
+            continue
+    return {"panels": out, "count": len(out)}
 
 
 @router.get("/panels/latest")
