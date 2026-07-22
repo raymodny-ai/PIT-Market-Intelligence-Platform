@@ -170,27 +170,59 @@ def refresh(
 
 # ---------- pit build / replay ----------
 
-@pit_app.command("build")
-def pit_build(
-    decision_time: str = typer.Option(..., "--decision-time", "-t", help="ISO-8601 timestamp."),
-    universe: str = typer.Option(
-        "SPY,QQQ,GLD,SLV", "--universe", "-u", help="Comma-separated canonical_symbols."
-    ),
-    decision_clock: str = typer.Option("1805_ET", "--clock", help="1605_ET or 1805_ET."),
-    config_dir: Path = typer.Option(_default_config_dir, "--config", "-c"),
-    data_dir: Path = typer.Option(_default_data_dir, "--data", "-d"),
-    output: Path | None = typer.Option(
-        None, "--output", "-o", help="Override output JSON path."
-    ),
-) -> None:
-    """Build a PIT panel for the given decision_time."""
-    reg = _load_registry(config_dir)
-    dt = _ts(decision_time).astimezone(UTC)
-    symbols = [s.strip() for s in universe.split(",")]
+class PanelBuildError(ValueError):
+    """Raised when a panel build request is invalid (bad symbols, bad ts, etc.).
+
+    Used by both the CLI and the HTTP API so they share validation semantics.
+    """
+
+
+def build_panel_manifest(
+    decision_time: str,
+    universe: list[str] | str,
+    decision_clock: str = "1805_ET",
+    *,
+    config_dir: Path | None = None,
+    data_dir: Path | None = None,
+    output: Path | None = None,
+) -> dict:
+    """Build a PIT panel manifest and write it to disk. Returns the manifest dict.
+
+    Args:
+        decision_time: ISO-8601 timestamp (trailing Z accepted).
+        universe: Comma-separated string or list of canonical_symbols.
+        decision_clock: '1605_ET' or '1805_ET'.
+        config_dir: Override PIT config dir (default from PIT_MARKET_CONFIG).
+        data_dir: Override data dir (default from PIT_MARKET_DATA).
+        output: Override output JSON path (default: {data_dir}/gold/pit_panels/{id}_manifest.json).
+
+    Raises:
+        PanelBuildError: if the timestamp or symbols are invalid, or the
+            registry can't be loaded.
+    """
+    if config_dir is None:
+        config_dir = _default_config_dir()
+    if data_dir is None:
+        data_dir = _default_data_dir()
+    try:
+        reg = _load_registry(config_dir)
+    except typer.Exit:  # raised by _load_registry on RegistryError
+        raise PanelBuildError(f"failed to load registry from {config_dir}")
+    try:
+        dt = _ts(decision_time).astimezone(UTC)
+    except (ValueError, TypeError) as e:
+        raise PanelBuildError(f"invalid decision_time: {decision_time!r} ({e})") from e
+    if isinstance(universe, str):
+        symbols = [s.strip() for s in universe.split(",") if s.strip()]
+    else:
+        symbols = [s.strip() for s in universe if s and s.strip()]
+    if not symbols:
+        raise PanelBuildError("universe must contain at least one symbol")
     unknown = [s for s in symbols if not reg.has_instrument(s)]
     if unknown:
-        err_console.print(f"[red]unknown canonical_symbol(s):[/red] {unknown}")
-        raise typer.Exit(code=2)
+        raise PanelBuildError(f"unknown canonical_symbol(s): {unknown}")
+    if decision_clock not in {"1605_ET", "1805_ET"}:
+        raise PanelBuildError(f"decision_clock must be 1605_ET or 1805_ET, got {decision_clock!r}")
     panels_dir = data_dir / "gold" / "pit_panels"
     panels_dir.mkdir(parents=True, exist_ok=True)
     panel_id = f"cli-{dt.strftime('%Y%m%dT%H%M%SZ')}-{'-'.join(symbols)}"
@@ -206,7 +238,37 @@ def pit_build(
     }
     out = output or (panels_dir / f"{panel_id}_manifest.json")
     out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-    console.print(f"[bold green]✓[/bold green] panel manifest written: {out}")
+    manifest["_path"] = str(out)
+    return manifest
+
+
+@pit_app.command("build")
+def pit_build(
+    decision_time: str = typer.Option(..., "--decision-time", "-t", help="ISO-8601 timestamp."),
+    universe: str = typer.Option(
+        "SPY,QQQ,GLD,SLV", "--universe", "-u", help="Comma-separated canonical_symbols."
+    ),
+    decision_clock: str = typer.Option("1805_ET", "--clock", help="1605_ET or 1805_ET."),
+    config_dir: Path = typer.Option(_default_config_dir, "--config", "-c"),
+    data_dir: Path = typer.Option(_default_data_dir, "--data", "-d"),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Override output JSON path."
+    ),
+) -> None:
+    """Build a PIT panel for the given decision_time."""
+    try:
+        manifest = build_panel_manifest(
+            decision_time=decision_time,
+            universe=universe,
+            decision_clock=decision_clock,
+            config_dir=config_dir,
+            data_dir=data_dir,
+            output=output,
+        )
+    except PanelBuildError as e:
+        err_console.print(f"[red]{e}[/red]")
+        raise typer.Exit(code=2) from e
+    console.print(f"[bold green]✓[/bold green] panel manifest written: {manifest['_path']}")
 
 
 @pit_app.command("replay")

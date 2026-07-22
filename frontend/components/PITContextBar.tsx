@@ -5,6 +5,7 @@
 //        quality badge, data_age, "另存为快照" button.
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useSliceStore } from "../stores/sliceStore";
 import { useReportStore } from "../stores/reportStore";
 import { PanelSwitcher } from "./PanelSwitcher";
@@ -130,6 +131,14 @@ export function PITContextBar(props: PITContextBarProps) {
 
         <PanelSwitcher currentPanelId={panelId} className="ml-2" />
 
+        <Link
+          href="/panels/new"
+          className="ml-1 flex items-center gap-1 rounded border border-brand-500 bg-white px-2 py-1 text-sm text-brand-700 hover:bg-brand-50 transition-colors"
+          title="新建 PIT panel"
+        >
+          <PlusIcon /> 新建
+        </Link>
+
         <button
           type="button"
           onClick={props.onSaveSnapshot}
@@ -148,6 +157,15 @@ function SaveIcon() {
       <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
       <polyline points="17 21 17 13 7 13 7 21" />
       <polyline points="7 3 7 8 15 8" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="12" y1="5" x2="12" y2="19" />
+      <line x1="5" y1="12" x2="19" y2="12" />
     </svg>
   );
 }

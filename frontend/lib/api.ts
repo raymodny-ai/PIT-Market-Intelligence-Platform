@@ -102,6 +102,31 @@ export async function fetchPanelsList(): Promise<PanelListResponse | null> {
   return validated(PanelListResponseSchema, r, { panels: [], count: 0 });
 }
 
+export interface BuildPanelRequest {
+  decision_time: string;        // ISO-8601
+  universe: string[];           // canonical_symbols
+  decision_clock?: "1605_ET" | "1805_ET";
+}
+
+export interface BuildPanelResponse {
+  panel_id: string;
+  decision_time_utc: string;
+  decision_clock: string;
+  universe: string[];
+  registry_hash: string;
+  feature_version: string;
+  metric_registry_version: string;
+  instrument_registry_version: string;
+}
+
+export async function buildPanel(req: BuildPanelRequest): Promise<BuildPanelResponse | null> {
+  const r = await postJson<any>("/v1/panels/build", {
+    decision_clock: "1805_ET",
+    ...req,
+  });
+  return r as BuildPanelResponse | null;
+}
+
 export async function fetchPanelLatest(): Promise<PanelSummary | null> {
   const r = await getJson<any>("/v1/panels/latest");
   if (!r) return null;

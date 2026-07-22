@@ -2,6 +2,7 @@
 
 Endpoints:
 - GET  /v1/panels                  (list all manifests — used by PanelSwitcher)
+- POST /v1/panels/build            (create a new manifest)
 - GET  /v1/panels/latest
 - GET  /v1/panels/{panel_id}
 - POST /v1/panels/{panel_id}/slice
@@ -17,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -231,6 +233,45 @@ def get_panel(panel_id: str) -> dict:
     if not matches:
         raise HTTPException(status_code=404, detail=f"Panel not found: {panel_id}")
     return json.loads(matches[0].read_text(encoding="utf-8"))
+
+
+class BuildPanelRequest(BaseModel):
+    decision_time: str
+    universe: list[str] = Field(min_length=1, max_length=50)
+    decision_clock: str = "1805_ET"
+
+    @field_validator("decision_clock")
+    @classmethod
+    def _validate_clock(cls, v: str) -> str:
+        if v not in {"1605_ET", "1805_ET"}:
+            raise ValueError("decision_clock must be 1605_ET or 1805_ET")
+        return v
+
+
+@router.post("/panels/build", status_code=201)
+def build_panel(req: BuildPanelRequest) -> dict:
+    """Build a PIT panel manifest from a decision time + universe.
+
+    Thin wrapper around pit_market.cli.build_panel_manifest so the HTTP path
+    and CLI share validation/registry semantics.
+    """
+    from pit_market.cli import build_panel_manifest, PanelBuildError
+
+    config_dir = Path(os.environ.get("PIT_MARKET_CONFIG", "./config"))
+    data_dir = Path(os.environ.get("PIT_MARKET_DATA", "./data"))
+    try:
+        manifest = build_panel_manifest(
+            decision_time=req.decision_time,
+            universe=req.universe,
+            decision_clock=req.decision_clock,
+            config_dir=config_dir,
+            data_dir=data_dir,
+        )
+    except PanelBuildError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    # Strip the internal _path key; caller doesn't need it.
+    manifest.pop("_path", None)
+    return manifest
 
 
 @router.post("/panels/{panel_id}/slice")

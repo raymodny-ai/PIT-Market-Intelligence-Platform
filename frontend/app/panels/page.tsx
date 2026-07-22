@@ -41,12 +41,29 @@ export default function PanelsIndexPage() {
           {!listQ.isLoading && !listQ.isError && (listQ.data?.count ?? 0) === 0 && (
             <div className="rounded border border-ink-200 bg-white p-6 text-sm text-ink-600">
               <p className="font-medium text-ink-800">尚无 panel</p>
-              <p className="mt-2">
-                用 CLI 构建一个:
-              </p>
-              <pre className="mt-2 rounded bg-ink-50 p-3 text-xs font-mono text-ink-700">
+              <p className="mt-2">通过浏览器表单或 CLI 构建一个:</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Link
+                  href="/panels/new"
+                  className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+                >
+                  + 新建 panel
+                </Link>
+              </div>
+              <pre className="mt-3 rounded bg-ink-50 p-3 text-xs font-mono text-ink-700">
                 {`cd /vol1/.../PIT-Market-Intelligence-Platform\n. .venv/bin/activate\nexport PYTHONPATH=src PIT_CONFIG_DIR=config PIT_MARKET_DATA=./data PYTHONIOENCODING=utf-8\npit-market pit build --decision-time "2024-06-30T18:05:00Z" --universe "SPY,QQQ,GLD,SLV"`}
               </pre>
+            </div>
+          )}
+
+          {!listQ.isLoading && !listQ.isError && (listQ.data?.count ?? 0) > 0 && (
+            <div className="mb-3 flex items-center justify-end">
+              <Link
+                href="/panels/new"
+                className="rounded bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700"
+              >
+                + 新建 panel
+              </Link>
             </div>
           )}
 
