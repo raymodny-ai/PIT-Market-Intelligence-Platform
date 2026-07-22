@@ -1,83 +1,387 @@
-// API types — mirrors config/schemas/*.schema.json (PRD §12).
+// API types — Zod schemas + derived TS types (PRD §前端技术规范).
+// All API responses are validated at runtime with these schemas; the
+// resulting TS types are the source of truth for the UI layer.
 
-export type QualityStatus =
-  | "VALID"
-  | "DEGRADED"
-  | "STALE"
-  | "PARTIAL"
-  | "REJECTED"
-  | "INFERRED_AVAILABILITY"
-  | "SOURCE_FAILED"
-  | "SOURCE_THROTTLED";
+import { z } from "zod";
 
-export type FieldState =
-  | "LOW_EXTREME"
-  | "LOW"
-  | "NEUTRAL"
-  | "HIGH"
-  | "HIGH_EXTREME"
-  | "MISSING"
-  | "STALE"
-  | "INFERRED_AVAILABILITY";
+// -----------------------------------------------------------------
+// Enums (PRD §质量状态 / §LLM状态机)
+// -----------------------------------------------------------------
 
-export interface PanelSummary {
-  panel_id: string;
-  panel_sha256: string;
-  decision_time: string;
-  panel_version: string;
-  feature_version: string;
-  quality_status: QualityStatus;
-  quality_score: number;
-  row_count: number;
-  field_count: number;
-  instrument_registry_version: string;
-  metric_registry_version: string;
-}
+export const QualityStatus = z.enum([
+  "VALID",
+  "DEGRADED",
+  "STALE",
+  "PARTIAL",
+  "REJECTED",
+  "INFERRED_AVAILABILITY",
+  "SOURCE_FAILED",
+  "SOURCE_THROTTLED",
+  "EMPTY_RESPONSE",
+]);
+export type QualityStatus = z.infer<typeof QualityStatus>;
 
-export interface SlicePoint {
-  timestamp: string;
-  [field: string]: string | number | string[] | null;
-}
+export const FieldState = z.enum([
+  "LOW_EXTREME",
+  "LOW",
+  "NEUTRAL",
+  "HIGH",
+  "HIGH_EXTREME",
+  "MISSING",
+  "STALE",
+  "INFERRED_AVAILABILITY",
+]);
+export type FieldState = z.infer<typeof FieldState>;
 
-export interface SliceDataset {
-  slice_id: string;
-  panel_id: string;
-  fields: string[];
-  points: SlicePoint[];
-}
+export const FillType = z.enum([
+  "OBSERVED",
+  "FORWARD_FILLED",
+  "INTERPOLATED",
+  "DERIVED",
+]);
+export type FillType = z.infer<typeof FillType>;
 
-export interface Evidence {
-  evidence_id: string;
-  symbol: string;
-  field_name: string;
-  display_name_zh: string;
-  value: number;
-  unit: string;
-  state: FieldState;
-  observation_time: string;
-  available_at: string;
-  age_hours: number;
-  source_name: string;
-  dataset_name: string;
-  feature_observation_id: string;
-  normalized_observation_id: string;
-  raw_record_hash: string;
-  feature_definition_id: string;
-  quality_status: QualityStatus;
-  semantic_caveat_zh: string;
-}
+export const AnalysisStage = z.enum([
+  "QUEUED",
+  "EVIDENCE_READY",
+  "LLM_RUNNING",
+  "VALIDATING",
+  "PUBLISHED",
+  "REJECTED",
+]);
+export type AnalysisStage = z.infer<typeof AnalysisStage>;
 
-export interface Finding {
-  finding_id: string;
-  title_zh: string;
-  claim_zh: string;
-  classification: string;
-  support_type: string;
-  causal_language_level: "ASSOCIATIVE_ONLY" | "DESCRIPTIVE";
-  llm_confidence: number;
-  final_confidence: number;
-  evidence_ids: string[];
-  limitations_zh: string[];
-  model?: string;
-  prompt_version?: string;
-}
+// -----------------------------------------------------------------
+// PIT Point / Series / Panel
+// -----------------------------------------------------------------
+
+export const PITPoint = z.object({
+  timestamp: z.string(),                 // ISO 8601 — observation_time
+  value: z.number().nullable(),
+  available_at: z.string(),              // PIT anchor
+  observation_time: z.string().optional(),
+  quality_status: QualityStatus.default("VALID"),
+  fill_type: FillType.default("OBSERVED"),
+  source_id: z.string().optional(),
+  semantic_warning: z.string().optional(),
+  data_age_hours: z.number().nonnegative().optional(),
+});
+export type PITPoint = z.infer<typeof PITPoint>;
+
+export const PITSeries = z.object({
+  field_name: z.string(),
+  display_name_zh: z.string().optional(),
+  unit: z.string().optional(),
+  semantic_warning: z.string().optional(),
+  points: z.array(PITPoint),
+});
+export type PITSeries = z.infer<typeof PITSeries>;
+
+export const SliceResponse = z.object({
+  panel_id: z.string(),
+  decision_time: z.string(),
+  fields: z.array(z.string()),
+  series: z.array(PITSeries),
+  // Backward-compat with old shape:
+  points: z.array(z.any()).optional(),
+});
+export type SliceResponse = z.infer<typeof SliceResponse>;
+
+// -----------------------------------------------------------------
+// Panel summary
+// -----------------------------------------------------------------
+
+export const PanelSummary = z.object({
+  panel_id: z.string(),
+  panel_sha256: z.string().optional(),
+  decision_time: z.string(),
+  panel_version: z.string(),
+  feature_version: z.string().optional(),
+  quality_status: QualityStatus,
+  quality_score: z.number().optional(),
+  row_count: z.number().int().nonnegative().optional(),
+  field_count: z.number().int().nonnegative().optional(),
+  instrument_registry_version: z.string().optional(),
+  metric_registry_version: z.string().optional(),
+  registry_hash: z.string().optional(),
+});
+export type PanelSummary = z.infer<typeof PanelSummary>;
+
+// -----------------------------------------------------------------
+// AG Grid table (PIT panel wide-table)
+// -----------------------------------------------------------------
+
+export const TableRow = z.object({
+  canonical_symbol: z.string(),
+  decision_time: z.string(),
+  panel_version: z.string(),
+  // price block
+  close_raw: z.number().nullable().optional(),
+  close_adj: z.number().nullable().optional(),
+  z_score_63d: z.number().nullable().optional(),
+  return_1d: z.number().nullable().optional(),
+  return_5d: z.number().nullable().optional(),
+  // macro
+  real_rate_10y: z.number().nullable().optional(),
+  dxy_z_score: z.number().nullable().optional(),
+  vix_level: z.number().nullable().optional(),
+  hy_spread: z.number().nullable().optional(),
+  // COT
+  managed_money_net: z.number().nullable().optional(),
+  cot_net_pct_oi: z.number().nullable().optional(),
+  crowd_score: z.number().nullable().optional(),
+  // short
+  short_ratio_finra: z.number().nullable().optional(),
+  short_flow_z_score: z.number().nullable().optional(),
+  // meta
+  quality_status: QualityStatus,
+  fill_type: FillType.optional(),
+  evidence_ids: z.array(z.string()).optional(),
+});
+export type TableRow = z.infer<typeof TableRow>;
+
+export const TablePageInfo = z.object({
+  page: z.number().int().min(1),
+  page_size: z.number().int().min(1),
+  total: z.number().int().nonnegative(),
+  has_next: z.boolean(),
+});
+export type TablePageInfo = z.infer<typeof TablePageInfo>;
+
+export const TableResponse = z.object({
+  panel_id: z.string(),
+  rows: z.array(TableRow),
+  page_info: TablePageInfo,
+});
+export type TableResponse = z.infer<typeof TableResponse>;
+
+// -----------------------------------------------------------------
+// Risk Heatmap
+// -----------------------------------------------------------------
+
+export const HeatmapCell = z.object({
+  canonical_symbol: z.string(),
+  domain: z.string(),
+  z_score: z.number().nullable(),
+  percentile_rank: z.number().nullable().optional(),
+  quality_status: QualityStatus,
+  available_at: z.string().optional(),
+  semantic_warning: z.string().optional(),
+});
+export type HeatmapCell = z.infer<typeof HeatmapCell>;
+
+export const HeatmapResponse = z.object({
+  panel_id: z.string(),
+  symbols: z.array(z.string()),
+  domains: z.array(z.string()),
+  cells: z.array(HeatmapCell),
+});
+export type HeatmapResponse = z.infer<typeof HeatmapResponse>;
+
+// -----------------------------------------------------------------
+// Evidence
+// -----------------------------------------------------------------
+
+export const Evidence = z.object({
+  evidence_id: z.string(),
+  symbol: z.string().optional(),
+  field_name: z.string(),
+  display_name_zh: z.string().optional(),
+  value: z.number().nullable(),
+  unit: z.string().optional(),
+  state: FieldState.optional(),
+  z_score: z.number().nullable().optional(),
+  percentile_rank: z.number().nullable().optional(),
+  observation_time: z.string(),
+  available_at: z.string(),
+  age_hours: z.number().nonnegative().optional(),
+  data_age_days: z.number().nonnegative().optional(),
+  source_name: z.string(),
+  dataset_name: z.string().optional(),
+  feature_observation_id: z.string().optional(),
+  feature_version: z.string().optional(),
+  normalized_observation_id: z.string().optional(),
+  fill_type: FillType.optional(),
+  raw_record_hash: z.string().optional(),
+  feature_definition_id: z.string().optional(),
+  quality_status: QualityStatus,
+  semantic_caveat_zh: z.string().optional(),
+});
+export type Evidence = z.infer<typeof Evidence>;
+
+export const EvidenceList = z.object({
+  panel_id: z.string(),
+  evidence: z.array(Evidence),
+});
+export type EvidenceList = z.infer<typeof EvidenceList>;
+
+// -----------------------------------------------------------------
+// Finding
+// -----------------------------------------------------------------
+
+export const Finding = z.object({
+  finding_id: z.string(),
+  analysis_run_id: z.string().optional(),
+  title_zh: z.string().optional(),
+  title: z.string().optional(),
+  claim_zh: z.string().optional(),
+  claim: z.string().optional(),
+  classification: z.string().optional(),
+  support_type: z.string().optional(),
+  causal_language_level: z
+    .enum(["ASSOCIATIVE_ONLY", "DESCRIPTIVE", "CAUSAL"])
+    .optional(),
+  llm_confidence: z.number().min(0).max(1).optional(),
+  final_confidence: z.number().min(0).max(1).optional(),
+  evidence_ids: z.array(z.string()),
+  limitations_zh: z.array(z.string()).optional(),
+  limitations: z.array(z.string()).optional(),
+  model: z.string().optional(),
+  prompt_version: z.string().optional(),
+  created_at: z.string().optional(),
+  rejected: z.boolean().optional(),
+  reject_reason: z.string().optional(),
+});
+export type Finding = z.infer<typeof Finding>;
+
+// -----------------------------------------------------------------
+// Lineage (5-level graph)
+// -----------------------------------------------------------------
+
+export const LineageNodeKind = z.enum([
+  "finding",
+  "evidence",
+  "feature",
+  "observation",
+  "raw",
+]);
+export type LineageNodeKind = z.infer<typeof LineageNodeKind>;
+
+export const LineageNode = z.object({
+  id: z.string(),
+  kind: LineageNodeKind,
+  label: z.string().optional(),
+  sha256: z.string().optional(),
+  url: z.string().optional(),
+  ts: z.string().optional(),
+  meta: z.record(z.any()).optional(),
+});
+export type LineageNode = z.infer<typeof LineageNode>;
+
+export const LineageEdge = z.object({
+  from: z.string(),
+  to: z.string(),
+  relation: z.string().optional(),
+});
+export type LineageEdge = z.infer<typeof LineageEdge>;
+
+export const LineageGraph = z.object({
+  panel_id: z.string().optional(),
+  finding_id: z.string().optional(),
+  nodes: z.array(LineageNode),
+  edges: z.array(LineageEdge),
+});
+export type LineageGraph = z.infer<typeof LineageGraph>;
+
+// -----------------------------------------------------------------
+// Source Health
+// -----------------------------------------------------------------
+
+export const SourceHealthEntry = z.object({
+  source_id: z.string(),
+  source_name: z.string().optional(),
+  last_ingest_utc: z.string().nullable(),
+  freshness_min: z.number().nullable(),
+  threshold_min: z.number(),
+  last_quality: QualityStatus,
+  status: z.enum(["OK", "STALE", "FAILED", "THROTTLED", "NO_DATA"]),
+  symbol_count: z.number().int().nonnegative().optional(),
+});
+export type SourceHealthEntry = z.infer<typeof SourceHealthEntry>;
+
+export const SourceHealthMatrix = z.object({
+  as_of_utc: z.string(),
+  sources: z.array(SourceHealthEntry),
+});
+export type SourceHealthMatrix = z.infer<typeof SourceHealthMatrix>;
+
+// -----------------------------------------------------------------
+// Revision Timeline (vintage / as-known)
+// -----------------------------------------------------------------
+
+export const RevisionEvent = z.object({
+  ts_utc: z.string(),
+  source_id: z.string(),
+  field_name: z.string().optional(),
+  vintage_date: z.string(),
+  revision_kind: z.enum(["INITIAL", "REVISED", "FINAL"]),
+  prev_value: z.number().nullable().optional(),
+  new_value: z.number().nullable().optional(),
+  diff: z.number().nullable().optional(),
+});
+export type RevisionEvent = z.infer<typeof RevisionEvent>;
+
+export const RevisionTimeline = z.object({
+  field_name: z.string(),
+  source_id: z.string(),
+  as_known_series: z.array(z.object({ ts: z.string(), v: z.number().nullable() })),
+  latest_series: z.array(z.object({ ts: z.string(), v: z.number().nullable() })),
+  events: z.array(RevisionEvent),
+});
+export type RevisionTimeline = z.infer<typeof RevisionTimeline>;
+
+// -----------------------------------------------------------------
+// OpenLineage LLMProvenanceRunFacet
+// -----------------------------------------------------------------
+
+export const LLMProvenanceRunFacet = z.object({
+  run_id: z.string(),
+  job: z.string().optional(),
+  inputs: z.array(z.string()).optional(),
+  outputs: z.array(z.string()).optional(),
+  facets: z.object({
+    llm_provenance: z.object({
+      model: z.string().optional(),
+      prompt_version: z.string().optional(),
+      schema_version: z.string().optional(),
+      validation: z
+        .object({
+          status: z.enum(["PASSED", "REJECTED"]),
+          rules: z.array(z.string()).optional(),
+          final_confidence: z.number().optional(),
+        })
+        .optional(),
+    }),
+  }),
+});
+export type LLMProvenanceRunFacet = z.infer<typeof LLMProvenanceRunFacet>;
+
+// -----------------------------------------------------------------
+// SSE event
+// -----------------------------------------------------------------
+
+export const SSEEvent = z.object({
+  id: z.string().optional(),
+  event: z.string().optional(),
+  data: z.union([z.string(), z.record(z.any())]).optional(),
+});
+export type SSEEvent = z.infer<typeof SSEEvent>;
+
+// -----------------------------------------------------------------
+// Validation helpers
+// -----------------------------------------------------------------
+
+export const safeParse = <T extends z.ZodTypeAny>(
+  schema: T,
+  raw: unknown,
+  context = "api",
+): z.infer<T> | null => {
+  const res = schema.safeParse(raw);
+  if (!res.success) {
+    if (typeof console !== "undefined") {
+      console.warn(`[${context}] zod validation failed`, res.error.issues);
+    }
+    return null;
+  }
+  return res.data;
+};

@@ -1,9 +1,9 @@
-import { Suspense } from "react";
 import DashboardClient from "./DashboardClient";
+import { Suspense } from "react";
 
 export default function DashboardPage() {
   return (
-    <Suspense fallback={<div style={{ padding: "2rem" }}>Loading…</div>}>
+    <Suspense fallback={<div className="p-8 text-ink-500">加载 dashboard...</div>}>
       <DashboardClient />
     </Suspense>
   );

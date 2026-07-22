@@ -1,83 +1,111 @@
-// SliceStore — global UI slice state (PRD §11.2).
+// sliceStore — global UI slice state (PRD §全局状态设计 / T-11).
+// Mirrors /v1/panels/{id}/slice request body and is the source of truth
+// for FilterRail, charts, and AG Grid.
+
 "use client";
 
 import { create } from "zustand";
 
-export type DecisionClock = "1605_ET" | "1805_ET";
-export type ViewMode = "overview" | "research" | "replay" | "audit";
+export type DomainKey = "price_volume" | "macro_rates" | "cot_positioning" | "short_flow";
+export type SourceKey = "yfinance" | "cftc" | "finra" | "fred_alfred" | "sec_edgar" | "etf_shares";
+export type QualityFilter = "VALID" | "STALE" | "INFERRED" | "FAILED" | "DEGRADED";
+export type Frequency = "daily" | "weekly" | "monthly";
+
+export const DOMAINS: { key: DomainKey; label: string; color: string }[] = [
+  { key: "price_volume", label: "价格 & 成交量", color: "#6366f1" },
+  { key: "macro_rates", label: "宏观 & 利率", color: "#0ea5e9" },
+  { key: "cot_positioning", label: "COT 持仓", color: "#10b981" },
+  { key: "short_flow", label: "短卖流量", color: "#f59e0b" },
+];
+
+export const SOURCES: { key: SourceKey; label: string }[] = [
+  { key: "yfinance", label: "yfinance" },
+  { key: "cftc", label: "CFTC COT" },
+  { key: "finra", label: "FINRA Reg SHO" },
+  { key: "fred_alfred", label: "FRED ALFRED" },
+  { key: "sec_edgar", label: "SEC EDGAR" },
+  { key: "etf_shares", label: "ETF Shares" },
+];
+
+export const QUALITY_OPTIONS: QualityFilter[] = [
+  "VALID", "STALE", "INFERRED", "DEGRADED", "FAILED",
+];
+
+export const FREQUENCIES: Frequency[] = ["daily", "weekly", "monthly"];
 
 export interface SliceState {
-  activePanelId: string | "latest";
-  decisionTime: string;
-  decisionClock: DecisionClock;
-  selectedSymbols: string[];
-  selectedDomains: string[];
-  selectedFields: string[];
-  selectedSources: string[];
-  selectedFrequencies: string[];
-  selectedStates: string[];
+  symbols: string[];
+  decisionTime: string;          // ISO 8601
+  decisionClock: "1605_ET" | "1805_ET";
   dateRange: { start: string; end: string };
-  includeStale: boolean;
-  includeInferredAvailability: boolean;
-  viewMode: ViewMode;
-  selectedEvidenceIds: string[];
-  selectedFindingIds: string[];
-  selectedChartPoints: Array<{ chart: string; index: number; x?: number; y?: number }>;
-
+  domains: DomainKey[];
+  dataSources: SourceKey[];
+  qualityFilter: QualityFilter[];
+  frequency: Frequency;
+  panelId: string;               // current active panel
   // setters
-  setActivePanel: (panelId: string | "latest") => void;
-  setDecisionTime: (t: string) => void;
-  setDecisionClock: (c: DecisionClock) => void;
   setSymbols: (s: string[]) => void;
-  setDomains: (s: string[]) => void;
-  setFields: (s: string[]) => void;
-  setSources: (s: string[]) => void;
-  setFrequencies: (s: string[]) => void;
-  setStates: (s: string[]) => void;
+  toggleSymbol: (s: string) => void;
+  setDecisionTime: (t: string) => void;
+  setDecisionClock: (c: "1605_ET" | "1805_ET") => void;
   setDateRange: (r: { start: string; end: string }) => void;
-  setIncludeStale: (b: boolean) => void;
-  setIncludeInferredAvailability: (b: boolean) => void;
-  setViewMode: (m: ViewMode) => void;
-  setSelectedEvidence: (ids: string[]) => void;
-  setSelectedFindings: (ids: string[]) => void;
-  setChartPoint: (point: { chart: string; index: number; x?: number; y?: number } | null) => void;
+  setDomains: (d: DomainKey[]) => void;
+  toggleDomain: (d: DomainKey) => void;
+  setDataSources: (s: SourceKey[]) => void;
+  toggleDataSource: (s: SourceKey) => void;
+  setQualityFilter: (q: QualityFilter[]) => void;
+  toggleQualityFilter: (q: QualityFilter) => void;
+  setFrequency: (f: Frequency) => void;
+  setPanelId: (p: string) => void;
+  reset: () => void;
 }
 
-export const useSliceStore = create<SliceState>((set) => ({
-  activePanelId: "latest",
+const DEFAULT_STATE = {
+  symbols: ["SPY", "QQQ", "GLD", "SLV"] as string[],
   decisionTime: new Date().toISOString(),
-  decisionClock: "1805_ET",
-  selectedSymbols: ["SPY", "QQQ", "GLD", "SLV"],
-  selectedDomains: [],
-  selectedFields: [],
-  selectedSources: [],
-  selectedFrequencies: [],
-  selectedStates: [],
-  dateRange: { start: "2026-01-01", end: "2026-07-21" },
-  includeStale: false,
-  includeInferredAvailability: false,
-  viewMode: "research",
-  selectedEvidenceIds: [],
-  selectedFindingIds: [],
-  selectedChartPoints: [],
+  decisionClock: "1805_ET" as const,
+  dateRange: {
+    start: new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10),
+    end: new Date().toISOString().slice(0, 10),
+  },
+  domains: ["price_volume" as DomainKey],
+  dataSources: ["yfinance" as SourceKey, "fred_alfred" as SourceKey],
+  qualityFilter: ["VALID" as QualityFilter, "DEGRADED" as QualityFilter, "INFERRED" as QualityFilter],
+  frequency: "daily" as Frequency,
+  panelId: "latest",
+};
 
-  setActivePanel: (panelId) => set({ activePanelId: panelId }),
+export const useSliceStore = create<SliceState>((set, get) => ({
+  ...DEFAULT_STATE,
+
+  setSymbols: (s) => set({ symbols: s }),
+  toggleSymbol: (s) => set({
+    symbols: get().symbols.includes(s)
+      ? get().symbols.filter((x) => x !== s)
+      : [...get().symbols, s],
+  }),
   setDecisionTime: (t) => set({ decisionTime: t }),
   setDecisionClock: (c) => set({ decisionClock: c }),
-  setSymbols: (s) => set({ selectedSymbols: s }),
-  setDomains: (s) => set({ selectedDomains: s }),
-  setFields: (s) => set({ selectedFields: s }),
-  setSources: (s) => set({ selectedSources: s }),
-  setFrequencies: (s) => set({ selectedFrequencies: s }),
-  setStates: (s) => set({ selectedStates: s }),
   setDateRange: (r) => set({ dateRange: r }),
-  setIncludeStale: (b) => set({ includeStale: b }),
-  setIncludeInferredAvailability: (b) => set({ includeInferredAvailability: b }),
-  setViewMode: (m) => set({ viewMode: m }),
-  setSelectedEvidence: (ids) => set({ selectedEvidenceIds: ids }),
-  setSelectedFindings: (ids) => set({ selectedFindingIds: ids }),
-  setChartPoint: (point) =>
-    set({
-      selectedChartPoints: point ? [point] : [],
-    }),
+  setDomains: (d) => set({ domains: d }),
+  toggleDomain: (d) => set({
+    domains: get().domains.includes(d)
+      ? get().domains.filter((x) => x !== d)
+      : [...get().domains, d],
+  }),
+  setDataSources: (s) => set({ dataSources: s }),
+  toggleDataSource: (s) => set({
+    dataSources: get().dataSources.includes(s)
+      ? get().dataSources.filter((x) => x !== s)
+      : [...get().dataSources, s],
+  }),
+  setQualityFilter: (q) => set({ qualityFilter: q }),
+  toggleQualityFilter: (q) => set({
+    qualityFilter: get().qualityFilter.includes(q)
+      ? get().qualityFilter.filter((x) => x !== q)
+      : [...get().qualityFilter, q],
+  }),
+  setFrequency: (f) => set({ frequency: f }),
+  setPanelId: (p) => set({ panelId: p }),
+  reset: () => set(DEFAULT_STATE),
 }));

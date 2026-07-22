@@ -1,308 +1,206 @@
 "use client";
 
-import * as React from "react";
-import dynamic from "next/dynamic";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { PITContextBar, type QualityStatus } from "@/components/PITContextBar";
-import { FilterRail } from "@/components/FilterRail";
-import { EmptyState } from "@/components/EmptyState";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { FindingCard, type FindingData } from "@/components/FindingCard";
-import { queryKeys } from "@/lib/queryKeys";
-import { fetchHealth } from "@/lib/api";
-import { useSliceStore } from "@/stores/sliceStore";
+// Dashboard — market overview workspace (PRD §页面路由 /dashboard).
+// Layout: top PITContextBar + left FilterRail (240px) + main content
+// (KPI cards, risk heatmap, time-series chart, AG Grid table).
+// URL ↔ sliceStore sync via useUrlState.
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
+import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { ErrorBoundary } from "../../components/ErrorBoundary";
+import { PITContextBar } from "../../components/PITContextBar";
+import { FilterRail } from "../../components/FilterRail";
+import { TimeSeriesChart } from "../../components/TimeSeriesChart";
+import { RiskHeatmap } from "../../components/RiskHeatmap";
+import { AGGridPanel } from "../../components/AGGridPanel";
+import { EvidenceDrawer } from "../../components/EvidenceDrawer";
+import { LineageDrawer } from "../../components/LineageDrawer";
+import { SSEProgressBar } from "../../components/SSEProgressBar";
+import { EmptyState } from "../../components/EmptyState";
+import { FindingCard } from "../../components/FindingCard";
+import { useUrlState } from "../../lib/useUrlState";
+import { useSliceStore } from "../../stores/sliceStore";
+import { useReportStore } from "../../stores/reportStore";
+import { useSelectionStore } from "../../stores/selectionStore";
+import {
+  fetchPanelLatest,
+  fetchPanel,
+  fetchSlice,
+  fetchHeatmap,
+  fetchFinding,
+} from "../../lib/api";
+import { formatNumber, qualityPill, dataAgeHuman } from "../../lib/formatting";
+import type { Finding } from "../../types/api";
 
-interface PanelSummary {
-  panel_id: string;
-  panel_sha256: string;
-  decision_time: string;
-  panel_version: string;
-  feature_version: string;
-  quality_status: QualityStatus;
-  quality_score: number;
-  row_count: number;
-  field_count: number;
-}
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
-interface SlicePoint {
-  observation_time: string;
-  canonical_symbol: string;
-  field_name: string;
-  value: number | null;
-  source_name?: string | null;
-  price_type?: string | null;
-}
-
-async function fetchLatestPanel(): Promise<PanelSummary | null> {
-  const res = await fetch("/v1/panels/latest");
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`panels/latest: ${res.status}`);
-  return res.json();
-}
-
-async function fetchSlice(
-  panelId: string,
-  body: { universe: string[]; fields?: string[]; sources?: string[]; sort?: object; page?: object }
-): Promise<{ rows: SlicePoint[]; row_count: number; cache_key: string }> {
-  const r = await fetch(`/v1/panels/${panelId}/slice`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(`slice: ${r.status}`);
-  return r.json();
-}
-
-function DashboardClient() {
+export default function DashboardClient() {
+  useUrlState();
   const slice = useSliceStore();
-  const health = useQuery({ queryKey: queryKeys.health, queryFn: fetchHealth });
-  const panel = useQuery({
-    queryKey: ["panel-latest"],
-    queryFn: fetchLatestPanel,
-    retry: false,
+  const openRawHash = useSelectionStore((s) => s.openRawHash);
+  const startRun = useReportStore((s) => s.startRun);
+
+  const panelQuery = useQuery({
+    queryKey: ["panel-latest", slice.panelId],
+    queryFn: () => slice.panelId === "latest" ? fetchPanelLatest() : fetchPanel(slice.panelId),
+    staleTime: 30_000,
   });
 
-  const priceSlice = useQuery({
-    queryKey: ["price-slice", slice.selectedSymbols, slice.selectedFields],
-    queryFn: () => {
-      if (!panel.data) return Promise.resolve({ rows: [] as SlicePoint[], row_count: 0, cache_key: "" });
-      return fetchSlice(panel.data.panel_id, {
-        universe: slice.selectedSymbols,
-        fields: ["price__yf__close"],
-        sources: ["yfinance"],
-        sort: { field: "observation_time", direction: "asc" },
-      });
-    },
-    enabled: !!panel.data,
-    retry: false,
+  const panelId = panelQuery.data?.panel_id ?? slice.panelId;
+  const effectivePanelId = panelId && panelId !== "latest" ? panelId : null;
+
+  const sliceQ = useQuery({
+    queryKey: ["slice", effectivePanelId, slice.decisionTime, slice.symbols.join(",")],
+    queryFn: () => fetchSlice({
+      panel_id: effectivePanelId!,
+      decision_time: slice.decisionTime,
+      decision_clock: slice.decisionClock,
+      symbols: slice.symbols,
+      start: slice.dateRange.start,
+      end: slice.dateRange.end,
+    }),
+    enabled: !!effectivePanelId,
+    staleTime: 30_000,
   });
 
-  const crossSection = useQuery({
-    queryKey: ["cross-section", slice.selectedSymbols],
-    queryFn: () => {
-      if (!panel.data) return Promise.resolve({ rows: [] as SlicePoint[], row_count: 0, cache_key: "" });
-      return fetchSlice(panel.data.panel_id, {
-        universe: slice.selectedSymbols,
-        page: { offset: 0, limit: 500 },
-      });
-    },
-    enabled: !!panel.data,
-    retry: false,
+  const heatmapQ = useQuery({
+    queryKey: ["heatmap", effectivePanelId, slice.symbols.join(",")],
+    queryFn: () => fetchHeatmap({ panel_id: effectivePanelId!, decision_time: slice.decisionTime, symbols: slice.symbols }),
+    enabled: !!effectivePanelId,
+    staleTime: 60_000,
   });
 
-  const onBrushEnd = React.useCallback(
-    (evt: unknown) => {
-      const ev = evt as { range?: { x?: [string, string] } };
-      if (!ev?.range?.x) return;
-      const [start, end] = ev.range.x;
-      slice.setDateRange({ start: start.slice(0, 10), end: end.slice(0, 10) });
-    },
-    [slice]
-  );
+  const [demoFindings, setDemoFindings] = useState<Finding[]>([]);
 
-  const onHeatmapClick = React.useCallback(
-    (evt: unknown) => {
-      const ev = evt as { points?: Array<{ x?: string }> };
-      const p = ev?.points?.[0];
-      if (p?.x) slice.setSymbols([p.x]);
-    },
-    [slice]
-  );
+  // Demo: load sample finding on first mount
+  useEffect(() => {
+    fetchFinding("sample").then((f) => { if (f) setDemoFindings([f]); });
+  }, []);
 
-  const spySeries = (priceSlice.data?.rows ?? [])
-    .filter((r) => r.canonical_symbol === "SPY" && r.value != null)
-    .sort((a, b) => a.observation_time.localeCompare(b.observation_time));
-
-  const heatmapRows = React.useMemo(() => {
-    const map = new Map<string, Map<string, number | null>>();
-    for (const r of crossSection.data?.rows ?? []) {
-      if (r.value == null) continue;
-      const sym = r.canonical_symbol;
-      const src = r.source_name ?? "—";
-      if (!map.has(sym)) map.set(sym, new Map());
-      map.get(sym)!.set(src, r.value);
+  const handleAnalyze = async () => {
+    if (!effectivePanelId) {
+      alert("请先选择一个 panel(右上角切换 panel_id)");
+      return;
     }
-    const sources = Array.from(new Set([...map.values()].flatMap((m) => [...m.keys()])));
-    const symbols = [...map.keys()];
-    const z = symbols.map((s) => sources.map((src) => map.get(s)!.get(src) ?? null));
-    return { x: sources, y: symbols, z };
-  }, [crossSection.data]);
-
-  // T-23: LLM analysis mutation (Mock provider)
-  const analysis = useMutation({
-    mutationFn: async (panelId: string) => {
-      const r = await fetch("/v1/analyses", {
+    try {
+      const r = await fetch(`${API_BASE}/v1/analyses`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ panel_id: panelId, provider: "mock" }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ panel_id: effectivePanelId, provider: "mock" }),
       });
-      if (!r.ok) throw new Error(`analysis: ${r.status}`);
-      return r.json() as Promise<{
-        analysis_run_id: string;
-        status: string;
-        finding: FindingData | null;
-        errors: string[];
-      }>;
-    },
-  });
+      if (!r.ok) {
+        alert(`analyze 启动失败: ${r.status} ${r.statusText}`);
+        return;
+      }
+      const data = await r.json();
+      const runId = data.analysis_run_id ?? data.run_id;
+      if (runId) startRun(runId, effectivePanelId);
+    } catch (e: any) {
+      alert(`analyze 错误: ${e.message}`);
+    }
+  };
 
   return (
-    <ErrorBoundary>
+    <div className="min-h-screen bg-ink-50">
       <PITContextBar
-        panelId={panel.data?.panel_id ?? "no-panel"}
-        decisionTime={panel.data?.decision_time ?? "—"}
-        panelVersion={panel.data?.panel_version ?? "—"}
-        qualityStatus={panel.data?.quality_status ?? "EPHEMERAL"}
-        qualityScore={panel.data?.quality_score}
-        featureVersion={panel.data?.feature_version ?? "—"}
-        dataCutoff={panel.data?.decision_time ?? "—"}
+        panelId={panelQuery.data?.panel_id ?? slice.panelId}
+        decisionTime={slice.decisionTime}
+        panelVersion={panelQuery.data?.panel_version}
+        featureVersion={panelQuery.data?.feature_version}
+        qualityStatus={panelQuery.data?.quality_status}
+        onSaveSnapshot={() => alert("另存为快照: TODO T-32 / 报告 API 已就绪,前端可调用 POST /v1/panels/{id}/report")}
       />
-      <div style={{ display: "flex" }}>
-        <FilterRail />
-        <main style={{ flex: 1, padding: "2rem", minWidth: 0 }}>
-          {panel.isLoading && <p>Loading latest panel…</p>}
-          {panel.isError && (
-            <EmptyState
-              title="Backend not reachable"
-              description="Start the FastAPI server (port 8000) to see live data."
+
+      <div className="flex">
+        <FilterRail onAnalyzeClick={handleAnalyze} />
+
+        <main className="flex-1 min-w-0 p-4 space-y-4">
+          {/* KPI cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <KpiCard label="Universe" value={slice.symbols.length.toString()} sub={slice.symbols.join(" · ")} />
+            <KpiCard
+              label="Decision Time"
+              value={slice.decisionTime.slice(0, 10)}
+              sub={`${slice.decisionClock} · age ${dataAgeHuman(slice.decisionTime)}`}
             />
-          )}
-          {panel.data === null && (
-            <EmptyState
-              title="No panel built yet"
-              description="Run `pit-market pit build --decision-time ...` to create the first PIT panel."
+            <KpiCard
+              label="Quality"
+              value={panelQuery.data?.quality_status ?? "—"}
+              sub={panelQuery.data?.quality_score !== undefined ? `score ${panelQuery.data.quality_score.toFixed(2)}` : "no panel"}
+              tone={panelQuery.data?.quality_status === "VALID" ? "ok" : "warn"}
             />
-          )}
-          {panel.data && (
-            <div style={{ display: "grid", gap: "1.5rem" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
-                <KpiCard label="Rows" value={String(panel.data.row_count)} />
-                <KpiCard label="Fields" value={String(panel.data.field_count)} />
-                <KpiCard label="Quality" value={panel.data.quality_status} />
-                <KpiCard label="Backend" value={health.data?.version ?? "—"} />
-              </div>
+            <KpiCard
+              label="Row count"
+              value={panelQuery.data?.row_count?.toLocaleString() ?? "—"}
+              sub={panelQuery.data?.field_count ? `${panelQuery.data.field_count} fields` : ""}
+            />
+          </div>
 
-              {spySeries.length > 0 && (
-                <Plot
-                  data={[
-                    {
-                      x: spySeries.map((r) => r.observation_time),
-                      y: spySeries.map((r) => r.value),
-                      type: "scatter",
-                      mode: "lines+markers",
-                      name: "SPY close",
-                    } as unknown as Plotly.Data,
-                  ]}
-                  layout={{
-                    title: "SPY Daily Close (brush to filter date range)",
-                    height: 360,
-                    xaxis: { title: "observation_time" },
-                    yaxis: { title: "USD" },
-                  } as unknown as Plotly.Layout}
-                  useResizeHandler
-                  style={{ width: "100%" }}
-                  onRelayout={(e: unknown) => {
-                    const ev = e as { range?: { x?: [string, string] } };
-                    if (ev?.range?.x) onBrushEnd({ range: { x: ev.range.x } });
-                  }}
-                />
-              )}
-
-              {heatmapRows.x.length > 0 && (
-                <Plot
-                  data={[
-                    {
-                      x: heatmapRows.x,
-                      y: heatmapRows.y,
-                      z: heatmapRows.z,
-                      type: "heatmap",
-                      colorscale: "Viridis",
-                    } as unknown as Plotly.Data,
-                  ]}
-                  layout={{
-                    title: "Cross-source / Cross-symbol (click to filter)",
-                    height: 280,
-                  } as unknown as Plotly.Layout}
-                  useResizeHandler
-                  style={{ width: "100%" }}
-                  onClick={onHeatmapClick}
-                />
-              )}
-
-              <div style={{ fontSize: "12px", color: "var(--muted)" }}>
-                Filters synced to URL · date range {slice.dateRange.start} → {slice.dateRange.end}
-              </div>
-
-              <section
-                style={{
-                  marginTop: "1.5rem",
-                  borderTop: "1px solid var(--border)",
-                  paddingTop: "1.5rem",
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-                  <h3 style={{ margin: 0, fontSize: "14px" }}>LLM Findings</h3>
-                  <button
-                    type="button"
-                    onClick={() => panel.data && analysis.mutate(panel.data.panel_id)}
-                    disabled={analysis.isPending}
-                    style={{
-                      padding: "0.4rem 0.75rem",
-                      background: "var(--accent)",
-                      color: "white",
-                      border: 0,
-                      borderRadius: "4px",
-                      cursor: analysis.isPending ? "wait" : "pointer",
-                      opacity: analysis.isPending ? 0.6 : 1,
-                    }}
-                  >
-                    {analysis.isPending ? "Analyzing…" : "Generate Analysis"}
-                  </button>
+          {/* Risk heatmap + time series */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="lg:col-span-1">
+              {heatmapQ.data ? (
+                <RiskHeatmap data={heatmapQ.data} />
+              ) : (
+                <div className="card p-4 h-[400px] flex items-center justify-center text-ink-400 text-sm">
+                  {heatmapQ.isLoading ? "加载热图..." : <EmptyState variant="no-data" title="暂无可视化热图数据" description="需要 panel 构建 + 数据 ingest 完成后显示" />}
                 </div>
-
-                {analysis.isError && (
-                  <p style={{ color: "var(--rejected)", fontSize: "12px" }}>
-                    Analysis failed: {(analysis.error as Error).message}
-                  </p>
-                )}
-                {analysis.data?.status === "REJECTED" && (
-                  <p style={{ color: "var(--degraded)", fontSize: "12px" }}>
-                    Finding rejected at validation: {analysis.data.errors.join("; ")}
-                  </p>
-                )}
-                {analysis.data?.finding && (
-                  <FindingCard finding={analysis.data.finding} />
-                )}
-                {!analysis.data && !analysis.isPending && (
-                  <p style={{ color: "var(--muted)", fontSize: "12px" }}>
-                    Click &ldquo;Generate Analysis&rdquo; to run LLM (mock) on the current panel.
-                  </p>
-                )}
-              </section>
+              )}
             </div>
+            <div className="lg:col-span-2">
+              {sliceQ.data?.series?.length ? (
+                <TimeSeriesChart
+                  series={sliceQ.data.series}
+                  title="PIT 切片 · 多标的时序"
+                  height={400}
+                />
+              ) : (
+                <div className="card p-4 h-[400px] flex items-center justify-center text-ink-400 text-sm">
+                  {sliceQ.isLoading ? "加载时序..." : <EmptyState variant="no-data" title="暂无 PIT 时序数据" description="后端 panel 构建后此处自动填充" />}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* AG Grid wide table */}
+          {effectivePanelId ? (
+            <AGGridPanel panelId={effectivePanelId} height={420} />
+          ) : (
+            <div className="card p-4 h-[200px] flex items-center justify-center text-ink-400 text-sm">
+              <EmptyState
+                variant="no-data"
+                title="等待 panel 加载"
+                description="Dashboard 默认使用 /v1/panels/latest,当前没有可用的 panel"
+              />
+            </div>
+          )}
+
+          {/* Demo findings */}
+          {demoFindings.length > 0 && (
+            <section>
+              <h2 className="text-sm font-semibold text-ink-900 mb-2">LLM Finding 样本</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {demoFindings.map((f) => <FindingCard key={f.finding_id} finding={f} />)}
+              </div>
+            </section>
           )}
         </main>
       </div>
-    </ErrorBoundary>
-  );
-}
 
-function KpiCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div
-      style={{
-        border: "1px solid var(--border)",
-        borderRadius: "6px",
-        padding: "1rem",
-        background: "white",
-      }}
-    >
-      <div style={{ color: "var(--muted)", fontSize: "12px" }}>{label}</div>
-      <div style={{ fontSize: "20px", fontWeight: 600, marginTop: "0.25rem" }}>{value}</div>
+      <EvidenceDrawer panelId={effectivePanelId ?? "latest"} />
+      {openRawHash && <LineageDrawer defaultEntityId={openRawHash} />}
+      <SSEProgressBar />
     </div>
   );
 }
 
-export default DashboardClient;
+function KpiCard({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: "ok" | "warn" }) {
+  const pill = tone === "warn" ? "bg-amber-50 text-amber-700" : "bg-emerald-50 text-emerald-700";
+  return (
+    <div className="card-pad">
+      <div className="label-muted mb-1">{label}</div>
+      <div className="text-xl font-bold text-ink-900 tabular-nums font-mono">{value}</div>
+      {sub && <div className={`text-xs mt-1 ${tone === "warn" ? "text-amber-600" : "text-ink-500"} truncate`}>{sub}</div>}
+    </div>
+  );
+}

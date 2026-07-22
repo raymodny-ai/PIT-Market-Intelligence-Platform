@@ -1,39 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* -----------------------------------------------------------------
+ * PIT Market Intelligence — base styles
+ * PRD §设计原则:质量显式不静默,溯源到处可达
+ * ----------------------------------------------------------------- */
+
 :root {
-  --bg: #ffffff;
-  --fg: #111111;
-  --muted: #666666;
-  --border: #e5e5e5;
-  --accent: #0066cc;
-  --good: #16a34a;
-  --degraded: #ca8a04;
-  --stale: #ea580c;
-  --partial: #dc2626;
-  --rejected: #7f1d1d;
-  --ephemeral: #475569;
+  --bg-page: #f8fafc;
+  --bg-card: #ffffff;
+  --border-soft: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --text-primary: #0f172a;
+  --text-secondary: #475569;
+  --text-muted: #94a3b8;
 }
 
 * {
   box-sizing: border-box;
 }
 
-html,
-body {
+html, body {
   margin: 0;
   padding: 0;
-  background: var(--bg);
-  color: var(--fg);
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu,
-    Cantarell, "Open Sans", "Helvetica Neue", sans-serif;
-  font-size: 14px;
-  line-height: 1.5;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  font-feature-settings: "tnum" 1;  /* tabular numerals for tables */
 }
 
-a {
-  color: var(--accent);
-  text-decoration: none;
+button, input, select, textarea {
+  font-family: inherit;
 }
 
-a:hover {
-  text-decoration: underline;
+/* Scrollbar */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: #f1f5f9; }
+::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+/* -----------------------------------------------------------------
+ * Component classes (Tailwind layer)
+ * ----------------------------------------------------------------- */
+@layer components {
+  .card {
+    @apply bg-white border border-ink-200 rounded-lg shadow-sm;
+  }
+  .card-pad {
+    @apply card p-4;
+  }
+  .label-muted {
+    @apply text-xs uppercase tracking-wide text-ink-500 font-medium;
+  }
+  .label-value {
+    @apply text-sm text-ink-900 font-medium tabular-nums;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-700 disabled:bg-ink-300;
+  }
+  .btn-ghost {
+    @apply btn text-ink-700 hover:bg-ink-100 border border-ink-200;
+  }
+  .btn-icon {
+    @apply inline-flex items-center justify-center w-7 h-7 rounded text-ink-500 hover:bg-ink-100 hover:text-ink-900 transition-colors;
+  }
+  .input {
+    @apply w-full px-2.5 py-1.5 border border-ink-200 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500;
+  }
+  .quality-pill {
+    @apply inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wide;
+  }
+  .pulse-dot {
+    @apply inline-block w-2 h-2 rounded-full bg-current animate-pulse-slow;
+  }
+  .skeleton {
+    @apply bg-ink-200 animate-pulse rounded;
+  }
+}
+
+/* Plotly override: clip hover to chart area, no extra padding */
+.js-plotly-plot .plotly .modebar { display: none; }
+.js-plotly-plot .plotly .hoverlayer path { stroke-width: 1px; }
+
+/* AG Grid theme alignment */
+.ag-theme-quartz, .ag-theme-quartz-dark {
+  --ag-grid-size: 4px;
+  --ag-font-family: 'Inter', system-ui, sans-serif;
+  --ag-foreground-color: #0f172a;
+  --ag-background-color: #ffffff;
+  --ag-header-foreground-color: #475569;
+  --ag-header-background-color: #f8fafc;
+  --ag-border-color: #e2e8f0;
+  --ag-row-hover-color: #f1f5f9;
+  --ag-selected-row-background-color: #e0e7ff;
 }

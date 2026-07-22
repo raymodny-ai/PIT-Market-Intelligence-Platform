@@ -1,115 +1,157 @@
 "use client";
 
-import * as React from "react";
-import dynamic from "next/dynamic";
-import { useQuery } from "@tanstack/react-query";
-import { PITContextBar, type QualityStatus } from "@/components/PITContextBar";
-import { EmptyState } from "@/components/EmptyState";
-import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { useSliceStore } from "@/stores/sliceStore";
+// /dashboard/replay — historical decision time replay
+// (PRD §URL 即状态 + §时间回放). Slider / input let the user pick a
+// past decision_time; everything else (FilterRail, slice query, charts)
+// reuses the same PIT logic as /dashboard.
 
-const Plot = dynamic(() => import("react-plotly.js"), { ssr: false });
-
-interface PanelSummary {
-  panel_id: string;
-  panel_sha256: string;
-  decision_time: string;
-  panel_version: string;
-  feature_version: string;
-  quality_status: QualityStatus;
-  quality_score: number;
-  row_count: number;
-  field_count: number;
-}
-
-async function fetchPanelAt(panelId: string): Promise<PanelSummary | null> {
-  const r = await fetch(`/v1/panels/${panelId}`);
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`panels/${panelId}: ${r.status}`);
-  return r.json();
-}
-
-async function fetchLatestPanel(): Promise<PanelSummary | null> {
-  const r = await fetch("/v1/panels/latest");
-  if (r.status === 404) return null;
-  if (!r.ok) throw new Error(`panels/latest: ${r.status}`);
-  return r.json();
-}
+import { useEffect, useState } from "react";
+import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import { PITContextBar } from "../../../components/PITContextBar";
+import { FilterRail } from "../../../components/FilterRail";
+import { TimeSeriesChart } from "../../../components/TimeSeriesChart";
+import { EmptyState } from "../../../components/EmptyState";
+import { useSliceStore } from "../../../stores/sliceStore";
+import { fetchPanel, fetchSlice, fetchPanelLatest } from "../../../lib/api";
+import { formatTimestamp } from "../../../lib/formatting";
 
 export default function ReplayPage() {
   const slice = useSliceStore();
-  const [targetDate, setTargetDate] = React.useState<string>(slice.dateRange.end);
+  const [replayTime, setReplayTime] = useState(slice.decisionTime);
+  const [replayClock, setReplayClock] = useState<"1605_ET" | "1805_ET">(slice.decisionClock);
 
-  const latest = useQuery({ queryKey: ["panel-latest"], queryFn: fetchLatestPanel });
-  const historical = useQuery({
-    queryKey: ["panel-replay", targetDate],
-    queryFn: async () => {
-      if (!latest.data) return null;
-      // For Phase 2: pretend panel_id embeds the date. Real impl needs PIT replay.
-      return fetchPanelAt(latest.data.panel_id);
-    },
-    enabled: !!latest.data,
-  });
+  // Push replay state into store so charts react
+  useEffect(() => {
+    slice.setDecisionTime(replayTime);
+    slice.setDecisionClock(replayClock);
+  }, [replayTime, replayClock, slice]);
 
-  const onSlide = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTargetDate(e.target.value);
-  };
+  const panelQ = useQueryLite();
+  const sliceQ = useQueryLite();
 
   return (
     <ErrorBoundary>
-      <PITContextBar
-        panelId={historical.data?.panel_id ?? "—"}
-        decisionTime={historical.data?.decision_time ?? "—"}
-        panelVersion={historical.data?.panel_version ?? "—"}
-        qualityStatus={historical.data?.quality_status ?? "EPHEMERAL"}
-        qualityScore={historical.data?.quality_score}
-        featureVersion={historical.data?.feature_version ?? "—"}
-        dataCutoff={historical.data?.decision_time ?? "—"}
-      />
-      <main style={{ padding: "2rem" }}>
-        <h2>PIT Replay</h2>
-        <p style={{ color: "var(--muted)" }}>
-          Time-replay mode (PRD §11.4). Pick a date to view a historical panel.
-        </p>
-        <div style={{ marginTop: "1.5rem" }}>
-          <label style={{ display: "block" }}>
-            Decision date:
-            <input
-              type="date"
-              value={targetDate}
-              onChange={onSlide}
-              style={{ padding: "0.4rem", marginLeft: "0.5rem" }}
-            />
-          </label>
+      <div className="min-h-screen bg-ink-50">
+        <PITContextBar
+          panelId={panelQ.panelId}
+          decisionTime={replayTime}
+          panelVersion={panelQ.version}
+          qualityStatus={panelQ.quality}
+        />
+        <div className="flex">
+          <FilterRail />
+          <main className="flex-1 p-4 space-y-4">
+            <div className="card-pad">
+              <h2 className="text-sm font-semibold text-ink-900 mb-3">历史时点回放</h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="label-muted block mb-1">decision_time</label>
+                  <input
+                    type="datetime-local"
+                    value={replayTime.slice(0, 16)}
+                    onChange={(e) => setReplayTime(new Date(e.target.value).toISOString())}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label-muted block mb-1">decision_clock</label>
+                  <div className="flex gap-1">
+                    {(["1605_ET", "1805_ET"] as const).map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        onClick={() => setReplayClock(c)}
+                        className={`text-xs px-3 py-1.5 rounded border ${
+                          replayClock === c
+                            ? "bg-brand-50 border-brand-500 text-brand-700"
+                            : "bg-white border-ink-200 text-ink-500"
+                        }`}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <label className="label-muted block mb-1">快捷选择</label>
+                  <div className="flex gap-1 flex-wrap">
+                    {[-7, -30, -90, -180, -365].map((days) => (
+                      <button
+                        key={days}
+                        type="button"
+                        className="btn-ghost text-xs"
+                        onClick={() => {
+                          const d = new Date(Date.now() + days * 24 * 3600 * 1000);
+                          setReplayTime(d.toISOString());
+                        }}
+                      >
+                        {Math.abs(days)}d ago
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <div className="mt-3 text-xs text-ink-500">
+                当前回放至:<span className="font-mono ml-1">{formatTimestamp(replayTime, false)}</span>
+                {" "}({replayClock})。所有图表、Filter、AG Grid 在该时点重建。
+              </div>
+            </div>
+
+            {sliceQ.data?.series?.length ? (
+              <TimeSeriesChart series={sliceQ.data.series} title={`时序 · ${replayTime.slice(0, 10)}`} height={400} />
+            ) : (
+              <div className="card h-[420px] flex items-center justify-center">
+                <EmptyState
+                  variant="no-data"
+                  title="回放时点尚无 PIT 数据"
+                  description="选择更早的决策时点,或先到 /dashboard 跑一次 pit build"
+                />
+              </div>
+            )}
+          </main>
         </div>
-        {latest.isLoading && <p>Loading…</p>}
-        {latest.data === null && (
-          <EmptyState title="No panel built yet" description="Build the first PIT panel to use replay." />
-        )}
-        {historical.data && (
-          <div style={{ marginTop: "1.5rem" }}>
-            <Plot
-              data={[
-                {
-                  x: [historical.data.decision_time],
-                  y: [historical.data.quality_score],
-                  type: "scatter",
-                  mode: "markers",
-                  marker: { size: 20 },
-                  name: "Quality score",
-                } as unknown as Plotly.Data,
-              ]}
-              layout={{ title: "Replay snapshot", height: 280 } as unknown as Plotly.Layout}
-              useResizeHandler
-              style={{ width: "100%" }}
-            />
-            <p style={{ fontSize: "12px", color: "var(--muted)" }}>
-              Panel at <code>{historical.data.decision_time}</code> ·{" "}
-              quality <code>{historical.data.quality_status}</code>
-            </p>
-          </div>
-        )}
-      </main>
+      </div>
     </ErrorBoundary>
   );
+}
+
+// Tiny inline hooks to avoid a separate file import tangle
+function useQueryLite() {
+  // Local wrapper: re-uses slice & fetches
+  // We import @tanstack/react-query lazily to keep this file simple
+  // (the real one is in DashboardClient).
+  const slice = useSliceStore();
+  const [data, setData] = useState<any>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const p = await (slice.panelId === "latest" ? fetchPanelLatest() : fetchPanel(slice.panelId));
+        if (cancelled) return;
+        setData(p);
+      } catch { /* ignore */ }
+    })();
+    return () => { cancelled = true; };
+  }, [slice.panelId]);
+  const [sliceData, setSliceData] = useState<any>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!data?.panel_id || data.panel_id === "latest") { setSliceData(null); return; }
+      try {
+        const s = await fetchSlice({
+          panel_id: data.panel_id,
+          decision_time: slice.decisionTime,
+          decision_clock: slice.decisionClock,
+          symbols: slice.symbols,
+          start: slice.dateRange.start,
+          end: slice.dateRange.end,
+        });
+        if (cancelled) return;
+        setSliceData(s);
+      } catch { setSliceData(null); }
+    })();
+    return () => { cancelled = true; };
+  }, [data?.panel_id, slice.decisionTime, slice.decisionClock, slice.symbols.join(","), slice.dateRange.start, slice.dateRange.end]);
+  return { panelId: data?.panel_id, version: data?.panel_version, quality: data?.quality_status, data: sliceData };
 }
