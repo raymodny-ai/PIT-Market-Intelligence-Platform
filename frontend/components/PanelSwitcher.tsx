@@ -17,6 +17,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { fetchPanelsList } from "../lib/api";
+import { formatTimestampUtc } from "../lib/formatting";
 import type { PanelListEntry } from "../types/api";
 
 export interface PanelSwitcherProps {
@@ -184,8 +185,8 @@ export function PanelSwitcher({ currentPanelId, className = "" }: PanelSwitcherP
                       </span>
                     )}
                     {p.panel_id !== "latest" && p._mtime_utc && (
-                      <span className="ml-auto text-[10px] text-ink-400">
-                        {new Date(p._mtime_utc).toLocaleString()}
+                      <span className="ml-auto text-[10px] text-ink-400 font-mono">
+                        {formatTimestampUtc(p._mtime_utc)}
                       </span>
                     )}
                   </div>

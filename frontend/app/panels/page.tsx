@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { fetchPanelsList } from "../../lib/api";
+import { formatTimestampUtc } from "../../lib/formatting";
 
 export default function PanelsIndexPage() {
   const listQ = useQuery({
@@ -79,8 +80,8 @@ export default function PanelsIndexPage() {
                         {p.panel_id}
                       </span>
                       {p._mtime_utc && (
-                        <span className="ml-auto text-xs text-ink-400">
-                          {new Date(p._mtime_utc).toLocaleString()}
+                        <span className="ml-auto text-xs text-ink-400 font-mono">
+                          {formatTimestampUtc(p._mtime_utc)}
                         </span>
                       )}
                     </div>

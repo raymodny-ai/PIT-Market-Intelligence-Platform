@@ -46,25 +46,42 @@ export function formatTimestamp(iso: string | undefined | null, withTz = true): 
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth() + 1).padStart(2, "0");
-    const dd = String(d.getDate()).padStart(2, "0");
-    const hh = String(d.getHours()).padStart(2, "0");
-    const mi = String(d.getMinutes()).padStart(2, "0");
-    const ss = String(d.getSeconds()).padStart(2, "0");
-    return withTz ? `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} (${getTzShort(d)})` : `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
+    // Always render in UTC to keep SSR and CSR identical (server and
+    // browser often disagree on local TZ). Label the TZ explicitly so the
+    // caller isn't surprised.
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mi = String(d.getUTCMinutes()).padStart(2, "0");
+    const ss = String(d.getUTCSeconds()).padStart(2, "0");
+    return withTz ? `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss} UTC` : `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}`;
   } catch {
     return iso;
   }
 }
 
-function getTzShort(d: Date): string {
-  const offset = -d.getTimezoneOffset();
-  const sign = offset >= 0 ? "+" : "-";
-  const h = String(Math.floor(Math.abs(offset) / 60)).padStart(2, "0");
-  const m = String(Math.abs(offset) % 60).padStart(2, "0");
-  return `UTC${sign}${h}:${m}`;
+// formatTimestampUtc — always renders in UTC, never local TZ. Use this for
+// SSR-rendered timestamps to avoid React hydration mismatches (server vs
+// browser locale).
+export function formatTimestampUtc(iso: string | undefined | null): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    const yyyy = d.getUTCFullYear();
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mi = String(d.getUTCMinutes()).padStart(2, "0");
+    const ss = String(d.getUTCSeconds()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${mi}:${ss}Z`;
+  } catch {
+    return iso;
+  }
 }
+
+
 
 export function dataAgeHuman(iso: string | undefined, now = new Date()): string {
   if (!iso) return "—";

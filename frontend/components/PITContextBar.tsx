@@ -4,10 +4,11 @@
 // Shows: panel_id, decision_time, panel_version, feature_version,
 //        quality badge, data_age, "另存为快照" button.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSliceStore } from "../stores/sliceStore";
 import { useReportStore } from "../stores/reportStore";
 import { PanelSwitcher } from "./PanelSwitcher";
+import { useMounted } from "../lib/useMounted";
 import { formatTimestamp, dataAgeHuman, qualityPill } from "../lib/formatting";
 import type { QualityStatus } from "../types/api";
 
@@ -26,6 +27,22 @@ export function PITContextBar(props: PITContextBarProps) {
   const slice = useSliceStore();
   const currentRun = useReportStore((s) => s.currentRun);
   const [hovered, setHovered] = useState(false);
+  const mounted = useMounted();
+
+  // Refresh the store's sentinel decisionTime / dateRange to real "now"
+  // once the component has mounted. SSR uses the sentinel so it matches
+  // the first client render; this effect then updates to the real values.
+  useEffect(() => {
+    if (!mounted) return;
+    if (slice.decisionTime === "1970-01-01T00:00:00.000Z") {
+      slice.setDecisionTime(new Date().toISOString());
+    }
+    if (slice.dateRange.end === "1970-01-01") {
+      const end = new Date().toISOString().slice(0, 10);
+      const start = new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+      slice.setDateRange({ start, end });
+    }
+  }, [mounted, slice]);
 
   const panelId = props.panelId ?? slice.panelId ?? "latest";
   const decisionTime = props.decisionTime ?? slice.decisionTime;
@@ -33,7 +50,12 @@ export function PITContextBar(props: PITContextBarProps) {
   const featureVersion = props.featureVersion ?? "—";
   const quality = props.qualityStatus ?? "VALID";
   const pill = qualityPill(quality);
-  const dataAgeStr = props.dataAgeHours !== undefined
+  // dataAgeHuman depends on Date.now() which differs between server render
+  // and client hydration, so only render it after the component mounts.
+  // Server shows "—" so SSR HTML matches the first client render.
+  const dataAgeStr = !mounted
+    ? "—"
+    : props.dataAgeHours !== undefined
     ? dataAgeHuman(new Date(Date.now() - props.dataAgeHours * 3600 * 1000).toISOString())
     : dataAgeHuman(decisionTime);
 

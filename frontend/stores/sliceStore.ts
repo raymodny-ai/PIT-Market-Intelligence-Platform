@@ -60,13 +60,18 @@ export interface SliceState {
   reset: () => void;
 }
 
+// Default state is deterministic across SSR and CSR to avoid hydration
+// mismatches. Values depending on "now" are intentionally sentinel; the
+// client refreshes them via useEffect after first paint. Components that
+// render time-sensitive data must use the `useMounted()` flag so they only
+// render on the client.
 const DEFAULT_STATE = {
   symbols: ["SPY", "QQQ", "GLD", "SLV"] as string[],
-  decisionTime: new Date().toISOString(),
+  decisionTime: "1970-01-01T00:00:00.000Z",
   decisionClock: "1805_ET" as const,
   dateRange: {
-    start: new Date(Date.now() - 90 * 24 * 3600 * 1000).toISOString().slice(0, 10),
-    end: new Date().toISOString().slice(0, 10),
+    start: "1970-01-01",
+    end: "1970-01-01",
   },
   domains: ["price_volume" as DomainKey],
   dataSources: ["yfinance" as SourceKey, "fred_alfred" as SourceKey],
