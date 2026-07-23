@@ -46,6 +46,12 @@ ENV NODE_ENV=production \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 
+# curl is required by the HEALTHCHECK below (and useful for debugging).
+# Keep this layer slim by combining with the useradd below.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
 # Non-root user — match numeric uid for NAS volume compatibility.
 RUN groupadd --system --gid 1001 pit \
     && useradd --system --uid 1001 --gid pit --home /opt/pit/web pit
