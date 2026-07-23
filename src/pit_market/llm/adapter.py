@@ -31,6 +31,7 @@ log = logging.getLogger(__name__)
 
 class LLMProvider(StrEnum):
     OPENAI = "openai"
+    DEEPSEEK = "deepseek"
     GEMINI = "gemini"
     LOCAL = "local"
     MOCK = "mock"
@@ -108,12 +109,26 @@ class MockProvider:
         }
 
 
-class OpenAIProvider:
-    """OpenAI stub — real impl in production with API key."""
+class OpenAICompatProvider:
+    """OpenAI-compatible chat completions client.
 
-    def __init__(self, api_key: str | None = None, model: str = "gpt-4o") -> None:
-        self._api_key = api_key or os.environ.get("OPENAI_API_KEY")
+    Works for both OpenAI itself and any vendor exposing the same API surface
+    (DeepSeek, Moonshot, OpenRouter, etc.) — pass ``base_url`` to point at the
+    alternate endpoint. ``response_format={"type": "json_object"}`` forces the
+    model to emit a JSON document; the system prompt further constrains shape.
+    """
+
+    def __init__(
+        self,
+        api_key: str | None,
+        model: str,
+        base_url: str | None = None,
+        provider_label: str = "openai",
+    ) -> None:
+        self._api_key = api_key
         self._model = model
+        self._base_url = base_url
+        self._label = provider_label
 
     def analyze(
         self,
@@ -121,10 +136,43 @@ class OpenAIProvider:
         user_prompt: str = "",
     ) -> dict[str, Any]:
         if not self._api_key:
-            raise RuntimeError("OPENAI_API_KEY not set")
-        # Real call would POST to /v1/chat/completions with response_format={type:json_schema}.
-        # Phase 3 ships a stub; real network code is T-21 follow-up.
-        raise NotImplementedError("OpenAIProvider real network call not implemented in T-21; use MockProvider in tests")
+            raise RuntimeError(f"{self._label.upper()}_API_KEY not set")
+        try:
+            from openai import OpenAI
+        except ImportError as e:
+            raise RuntimeError("openai SDK not installed; install pit-market[llm]") from e
+
+        client_kwargs: dict[str, Any] = {"api_key": self._api_key}
+        if self._base_url:
+            client_kwargs["base_url"] = self._base_url
+        client = OpenAI(**client_kwargs)
+
+        response = client.chat.completions.create(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+        raw = response.choices[0].message.content or ""
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(
+                f"{self._label} returned non-JSON content (truncated): {raw[:200]!r}"
+            ) from e
+        return parsed
+
+
+# Default model + base_url per provider. DeepSeek exposes an OpenAI-compatible
+# endpoint at https://api.deepseek.com; only the base_url differs.
+_PROVIDER_DEFAULTS: dict[LLMProvider, dict[str, str]] = {
+    LLMProvider.OPENAI: {"model": "gpt-4o", "base_url": ""},
+    LLMProvider.DEEPSEEK: {"model": "deepseek-chat", "base_url": "https://api.deepseek.com"},
+    # GEMINI / LOCAL ship in follow-up.
+}
 
 
 class LLMAdapter:
@@ -133,13 +181,24 @@ class LLMAdapter:
     def __init__(
         self,
         provider: LLMProvider = LLMProvider.MOCK,
-        model: str = "gpt-4o",
+        model: str | None = None,
         api_key: str | None = None,
     ) -> None:
         if provider == LLMProvider.MOCK:
             self._client: LLMClient = MockProvider()
-        elif provider == LLMProvider.OPENAI:
-            self._client = OpenAIProvider(api_key=api_key, model=model)
+        elif provider in (LLMProvider.OPENAI, LLMProvider.DEEPSEEK):
+            defaults = _PROVIDER_DEFAULTS[provider]
+            chosen_model = model or defaults["model"]
+            base_url = defaults["base_url"] or None
+            # Fall back to the matching env var for the api_key so callers can
+            # rely on secrets loaded via .env without passing the key explicitly.
+            env_var = "OPENAI_API_KEY" if provider == LLMProvider.OPENAI else "DEEPSEEK_API_KEY"
+            self._client = OpenAICompatProvider(
+                api_key=api_key or os.environ.get(env_var),
+                model=chosen_model,
+                base_url=base_url,
+                provider_label=provider.value,
+            )
         elif provider in (LLMProvider.GEMINI, LLMProvider.LOCAL):
             raise NotImplementedError(f"{provider.value} provider ships in T-21 follow-up")
         else:
