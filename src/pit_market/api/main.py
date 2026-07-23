@@ -42,6 +42,24 @@ app = FastAPI(
     description="Phase 1: Panel / Slice / Registry endpoints.",
     lifespan=lifespan,
 )
+
+# CORS — allow the local Next.js dev frontend (port 8701) and any localhost origin.
+# Browsers enforce CORS for cross-origin fetches even on the same host; without this,
+# the frontend falls back to the empty-state branch because every fetch throws.
+from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:8701",
+        "http://localhost:8701",
+        "http://127.0.0.1:3000",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(panels_api.router)
 app.include_router(export_api.export_router)
 app.include_router(analyses_api.router)

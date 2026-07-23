@@ -38,36 +38,53 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 export default function DashboardClient() {
   useUrlState();
   const router = useRouter();
-  const slice = useSliceStore();
+  // Select only the fields we render with — using `useSliceStore()` without a
+  // selector returns the whole state object on every update and triggers an
+  // infinite render loop in this dashboard. Read setters via getState() in
+  // queryFn closures so they don't capture stale values.
+  const storedPanelId = useSliceStore((s) => s.panelId);
+  const decisionTime = useSliceStore((s) => s.decisionTime);
+  const symbols = useSliceStore((s) => s.symbols);
   const openRawHash = useSelectionStore((s) => s.openRawHash);
   const startRun = useReportStore((s) => s.startRun);
 
   const panelQuery = useQuery({
-    queryKey: ["panel-latest", slice.panelId],
-    queryFn: () => slice.panelId === "latest" ? fetchPanelLatest() : fetchPanel(slice.panelId),
+    queryKey: ["panel-latest", storedPanelId],
+    queryFn: () =>
+      storedPanelId === "latest" ? fetchPanelLatest() : fetchPanel(storedPanelId),
     staleTime: 30_000,
   });
 
-  const panelId = panelQuery.data?.panel_id ?? slice.panelId;
+  const panelId = panelQuery.data?.panel_id ?? storedPanelId;
   const effectivePanelId = panelId && panelId !== "latest" ? panelId : null;
 
   const sliceQ = useQuery({
-    queryKey: ["slice", effectivePanelId, slice.decisionTime, slice.symbols.join(",")],
-    queryFn: () => fetchSlice({
-      panel_id: effectivePanelId!,
-      decision_time: slice.decisionTime,
-      decision_clock: slice.decisionClock,
-      symbols: slice.symbols,
-      start: slice.dateRange.start,
-      end: slice.dateRange.end,
-    }),
+    queryKey: ["slice", effectivePanelId, decisionTime, symbols.join(",")],
+    queryFn: () => {
+      const s = useSliceStore.getState();
+      return fetchSlice({
+        panel_id: effectivePanelId!,
+        decision_time: s.decisionTime,
+        decision_clock: s.decisionClock,
+        symbols: s.symbols,
+        start: s.dateRange.start,
+        end: s.dateRange.end,
+      });
+    },
     enabled: !!effectivePanelId,
     staleTime: 30_000,
   });
 
   const heatmapQ = useQuery({
-    queryKey: ["heatmap", effectivePanelId, slice.symbols.join(",")],
-    queryFn: () => fetchHeatmap({ panel_id: effectivePanelId!, decision_time: slice.decisionTime, symbols: slice.symbols }),
+    queryKey: ["heatmap", effectivePanelId, symbols.join(",")],
+    queryFn: () => {
+      const s = useSliceStore.getState();
+      return fetchHeatmap({
+        panel_id: effectivePanelId!,
+        decision_time: s.decisionTime,
+        symbols: s.symbols,
+      });
+    },
     enabled: !!effectivePanelId,
     staleTime: 60_000,
   });
@@ -108,8 +125,8 @@ export default function DashboardClient() {
   return (
     <div className="min-h-screen bg-ink-50">
       <PITContextBar
-        panelId={panelQuery.data?.panel_id ?? slice.panelId}
-        decisionTime={slice.decisionTime}
+        panelId={panelQuery.data?.panel_id ?? storedPanelId}
+        decisionTime={decisionTime}
         panelVersion={panelQuery.data?.panel_version}
         featureVersion={panelQuery.data?.feature_version}
         qualityStatus={panelQuery.data?.quality_status}
@@ -122,11 +139,11 @@ export default function DashboardClient() {
         <main className="flex-1 min-w-0 p-4 space-y-4">
           {/* KPI cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <KpiCard label="Universe" value={slice.symbols.length.toString()} sub={slice.symbols.join(" · ")} />
+            <KpiCard label="Universe" value={symbols.length.toString()} sub={symbols.join(" · ")} />
             <KpiCard
               label="Decision Time"
-              value={slice.decisionTime.slice(0, 10)}
-              sub={`${slice.decisionClock} · age ${dataAgeHuman(slice.decisionTime)}`}
+              value={decisionTime.slice(0, 10)}
+              sub={`${useSliceStore.getState().decisionClock} · age ${dataAgeHuman(decisionTime)}`}
             />
             <KpiCard
               label="Quality"

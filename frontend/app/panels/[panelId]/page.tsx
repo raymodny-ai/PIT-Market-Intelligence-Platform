@@ -21,12 +21,20 @@ import { fetchPanel, fetchSlice } from "../../../lib/api";
 export default function PanelPage() {
   const params = useParams<{ panelId: string }>();
   const panelId = params?.panelId ?? "latest";
-  const slice = useSliceStore();
+  // Subscribe only to the panelId + read setters via getState so the component
+  // does NOT re-render on every other store change. Reading the whole state
+  // via `useSliceStore()` (no selector) caused infinite re-render loops because
+  // zustand returns a fresh object on every set().
+  const storedPanelId = useSliceStore((s) => s.panelId);
+  const decisionTime = useSliceStore((s) => s.decisionTime);
+  const symbols = useSliceStore((s) => s.symbols);
   const openRawHash = useSelectionStore((s) => s.openRawHash);
 
   useEffect(() => {
-    if (panelId && panelId !== "latest") slice.setPanelId(panelId);
-  }, [panelId, slice]);
+    if (panelId && panelId !== "latest" && storedPanelId !== panelId) {
+      useSliceStore.getState().setPanelId(panelId);
+    }
+  }, [panelId, storedPanelId]);
 
   const panelQ = useQuery({
     queryKey: ["panel", panelId],
@@ -36,15 +44,18 @@ export default function PanelPage() {
   });
 
   const sliceQ = useQuery({
-    queryKey: ["slice", panelId, slice.decisionTime, slice.symbols.join(",")],
-    queryFn: () => fetchSlice({
-      panel_id: panelId,
-      decision_time: slice.decisionTime,
-      decision_clock: slice.decisionClock,
-      symbols: slice.symbols,
-      start: slice.dateRange.start,
-      end: slice.dateRange.end,
-    }),
+    queryKey: ["slice", panelId, decisionTime, symbols.join(",")],
+    queryFn: () => {
+      const s = useSliceStore.getState();
+      return fetchSlice({
+        panel_id: panelId,
+        decision_time: s.decisionTime,
+        decision_clock: s.decisionClock,
+        symbols: s.symbols,
+        start: s.dateRange.start,
+        end: s.dateRange.end,
+      });
+    },
     enabled: panelId !== "latest",
     staleTime: 30_000,
   });
@@ -66,7 +77,7 @@ export default function PanelPage() {
       <div className="min-h-screen bg-ink-50">
         <PITContextBar
           panelId={panelQ.data?.panel_id ?? panelId}
-          decisionTime={slice.decisionTime}
+          decisionTime={decisionTime}
           panelVersion={panelQ.data?.panel_version}
           featureVersion={panelQ.data?.feature_version}
           qualityStatus={panelQ.data?.quality_status}
