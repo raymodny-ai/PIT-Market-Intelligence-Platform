@@ -66,8 +66,9 @@ if [[ ! -d frontend/node_modules ]]; then
 fi
 
 echo "▶ starting frontend (next dev :${FE_PORT}) ..."
-(cd frontend && nohup npx next dev -p "$FE_PORT" > "$LOG_DIR/frontend.out.log" 2>&1 &)
-echo $! > "$LOG_DIR/frontend.pid"
+(cd frontend && nohup npx next dev -p "$FE_PORT" > "$LOG_DIR/frontend.out.log" 2>&1) &
+FE_PID=$!
+echo $FE_PID > "$LOG_DIR/frontend.pid"
 
 # --- wait + smoke ---
 echo "--- waiting for services to be ready ---"
