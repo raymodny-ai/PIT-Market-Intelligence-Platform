@@ -47,6 +47,36 @@ def configure(reg: Registry, panels_dir: str | Path, cache: CacheBackend | None 
     _CACHE = cache or InProcessCache()
 
 
+def _find_panel_manifest(panel_id: str) -> list[Path]:
+    """Locate manifest files for ``panel_id`` on disk.
+
+    Supports three layouts produced by different builders:
+      * nested:  ``<root>/<panel_id>/panel_manifest.json`` (T-10+ full builder)
+      * flat:    ``<root>/<panel_id>_manifest.json`` (CLI flat builder)
+      * loose:   ``<root>/<panel_id>/manifest.json`` (a few legacy paths)
+
+    Returns a list (sorted, mtime-newest first) so callers can pick the
+    canonical entry. Empty list means not found.
+    """
+    if _PANELS_DIR is None:
+        return []
+    candidates = (
+        list(_PANELS_DIR.rglob(f"{panel_id}/panel_manifest.json"))
+        + list(_PANELS_DIR.glob(f"{panel_id}_manifest.json"))
+        + list(_PANELS_DIR.rglob(f"{panel_id}/manifest.json"))
+    )
+    # De-dup (rglob + glob may overlap) and sort by mtime descending
+    seen: set[Path] = set()
+    unique: list[Path] = []
+    for c in candidates:
+        if c in seen:
+            continue
+        seen.add(c)
+        unique.append(c)
+    unique.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return unique
+
+
 def _get_registry() -> Registry:
     if _REGISTRY is None:
         raise ValueError("Registry not configured (lifespan not started)")
@@ -183,8 +213,22 @@ def get_latest_panel() -> dict:
 def get_panel(panel_id: str) -> dict:
     if _PANELS_DIR is None:
         raise HTTPException(status_code=503, detail="Panels dir not configured")
+
+    # DuckDB first (Phase 6 panels)
+    try:
+        from pit_market.storage.panel_store import query_panel
+        db_panel = query_panel(panel_id)
+        if db_panel is not None:
+            return db_panel
+    except Exception:
+        pass
+
+    # Filesystem fallback: try directory layout, then flat manifest
     matches = list(_PANELS_DIR.rglob(f"{panel_id}/panel_manifest.json"))
     if not matches:
+        flat = _PANELS_DIR / f"{panel_id}_manifest.json"
+        if flat.exists():
+            return json.loads(flat.read_text(encoding="utf-8"))
         raise HTTPException(status_code=404, detail=f"Panel not found: {panel_id}")
     return json.loads(matches[0].read_text(encoding="utf-8"))
 
@@ -507,18 +551,42 @@ def search_registry(q: str = "") -> dict:
     response_model=dict,
 )
 def list_all_panels() -> dict:
-    """List all panels from DuckDB panel store."""
+    """List all panels.
+
+    Source-of-truth is DuckDB (T-38+). Legacy CLI manifest-only panels
+    (data/gold/pit_panels/<id>_manifest.json or <id>/panel_manifest.json)
+    are merged in so historical panels remain visible to the API.
+    """
+    db_panels: list[dict[str, Any]] = []
     try:
         from pit_market.storage.panel_store import list_panels
-        panels = list_panels()
-        return {"panels": panels, "count": len(panels)}
+        db_panels = list_panels() or []
     except Exception:
-        # Fallback: scan filesystem
-        if _PANELS_DIR is None or not _PANELS_DIR.exists():
-            return {"panels": [], "count": 0}
-        manifests = list(_PANELS_DIR.rglob("manifest.json")) + list(_PANELS_DIR.rglob("*_manifest.json"))
-        panels = []
+        # DuckDB unavailable — fall back to filesystem scan below.
+        pass
+
+    fs_panels: list[dict[str, Any]] = []
+    if _PANELS_DIR is not None and _PANELS_DIR.exists():
+        manifests = (
+            list(_PANELS_DIR.rglob("panel_manifest.json"))
+            + list(_PANELS_DIR.rglob("manifest.json"))
+            + list(_PANELS_DIR.rglob("*_manifest.json"))
+        )
+        seen_ids: set[str] = set()
+        for p in db_panels:
+            pid = p.get("panel_id")
+            if pid:
+                seen_ids.add(pid)
         for m in manifests:
-            with contextlib.suppress(Exception):
-                panels.append(json.loads(m.read_text(encoding="utf-8")))
-        return {"panels": panels, "count": len(panels)}
+            try:
+                data = json.loads(m.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            pid = data.get("panel_id") or m.parent.name
+            if pid in seen_ids:
+                continue
+            seen_ids.add(pid)
+            fs_panels.append(data)
+
+    panels = db_panels + fs_panels
+    return {"panels": panels, "count": len(panels)}

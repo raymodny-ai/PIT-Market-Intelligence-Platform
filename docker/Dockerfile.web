@@ -10,19 +10,20 @@
 # =============================================================================
 
 # ---- Stage 1: install deps ----
-FROM node:20-bookworm-slim AS deps
+FROM node:22-bookworm-slim AS deps
 WORKDIR /opt/pit/web
 
-# Copy package files only — npm ci is faster + deterministic when lockfile exists.
+# Copy package files only. We deliberately use `npm install` (not `npm ci`)
+# because upstream's package.json bumps (@testing-library/*, jsdom, vitest,
+# plotly.js 2.35.3, etc.) are not yet reflected in package-lock.json. Using
+# `npm install` regenerates the lockfile in the build cache so this Dockerfile
+# is resilient to upstream lockfile drift. The `--legacy-peer-deps` flag
+# silences the ag-grid vs React peer dep warnings.
 COPY frontend/package.json frontend/package-lock.json* ./
-RUN if [ -f package-lock.json ]; then \
-      npm ci --legacy-peer-deps --no-audit --no-fund; \
-    else \
-      npm install --legacy-peer-deps --no-audit --no-fund; \
-    fi
+RUN npm install --legacy-peer-deps --no-audit --no-fund
 
 # ---- Stage 2: build ----
-FROM node:20-bookworm-slim AS build
+FROM node:22-bookworm-slim AS build
 WORKDIR /opt/pit/web
 
 # NEXT_PUBLIC_API_BASE is inlined into the bundle at build time.
@@ -38,7 +39,7 @@ COPY frontend ./
 RUN npm run build
 
 # ---- Stage 3: runtime ----
-FROM node:20-bookworm-slim AS runtime
+FROM node:22-bookworm-slim AS runtime
 WORKDIR /opt/pit/web
 
 ENV NODE_ENV=production \
