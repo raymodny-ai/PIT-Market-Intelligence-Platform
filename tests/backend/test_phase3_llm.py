@@ -188,6 +188,34 @@ class TestRule1:
         assert result.status == ValidationStatus.REJECTED
         assert any("rule 1" in e for e in result.errors)
 
+    def test_no_evidence_escape_hatch_for_data_quality_issue(self, small_catalog: EvidenceCatalog) -> None:
+        """DATA_QUALITY_ISSUE + NO_EVIDENCE findings are allowed to have an empty
+        evidence_ids list. This is the legitimate LLM response for an empty
+        catalog (manifest-only CLI panels) — the LLM is correctly reporting
+        'I have nothing to say' rather than fabricating data.
+        """
+        finding = _build_finding(
+            evidence_ids=[],
+            classification="DATA_QUALITY_ISSUE",
+            support_type="NO_EVIDENCE",
+        )
+        result = FindingValidator().validate(finding, small_catalog, datetime(2024, 1, 15, tzinfo=UTC))
+        assert result.status != ValidationStatus.REJECTED
+        assert not any("rule 1" in e for e in result.errors)
+
+    def test_no_evidence_with_risk_warning_still_rejected(self, small_catalog: EvidenceCatalog) -> None:
+        """The escape hatch only applies to DATA_QUALITY_ISSUE findings — a
+        RISK_WARNING with zero evidence_ids must still fail rule 1.
+        """
+        finding = _build_finding(
+            evidence_ids=[],
+            classification="RISK_WARNING",
+            support_type="MULTI_FACTOR_CONFIRMATION",
+        )
+        result = FindingValidator().validate(finding, small_catalog, datetime(2024, 1, 15, tzinfo=UTC))
+        assert result.status == ValidationStatus.REJECTED
+        assert any("rule 1" in e for e in result.errors)
+
 
 class TestRule2:
     def test_risk_finding_needs_two_domains(self, small_catalog: EvidenceCatalog) -> None:

@@ -101,8 +101,15 @@ class FindingValidator:
             e.evidence_id: e for e in catalog.evidence_catalog
         }
 
-        # Rule 1: ≥ 1 evidence
-        if not finding.evidence_ids:
+        # Rule 1: ≥ 1 evidence — unless the finding is a legitimate
+        # "no data" report (DATA_QUALITY_ISSUE + NO_EVIDENCE).
+        # Empty catalogs / insufficient evidence are valid LLM outcomes
+        # and should surface as a finding, not a hard error.
+        no_evidence_finding = (
+            finding.classification == "DATA_QUALITY_ISSUE"
+            and finding.support_type == "NO_EVIDENCE"
+        )
+        if not finding.evidence_ids and not no_evidence_finding:
             errors.append("rule 1: finding must reference ≥ 1 evidence_id")
 
         # Rule 3: all evidence_ids exist in catalog
