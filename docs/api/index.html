@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>PIT Market Intelligence — API Documentation</title>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="https://fonts.googleapis.com/css?family=Inter:300,400,500,600,700" rel="stylesheet">
+  <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+  <style>body { margin: 0; padding: 0; }</style>
+</head>
+<body>
+  <div id="redoc-container"></div>
+  <script>
+    Redoc.init('http://127.0.0.1:8000/openapi.json', {
+      theme: {
+        colors: { primary: { main: '#4f46e5' } },
+        typography: { fontFamily: '"Inter", sans-serif' },
+      },
+    }, document.getElementById('redoc-container'));
+  </script>
+</body>
+</html>

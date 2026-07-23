@@ -26,6 +26,11 @@ import {
   type RevisionTimeline,
   RevisionTimeline as RevisionTimelineSchema,
   type QualityStatus,
+  type AsyncTask,
+  type SystemHealth,
+  type BacktestResult,
+  type SnapshotDate,
+  type RegistryEntry,
 } from "../types/api";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
@@ -283,6 +288,104 @@ export async function fetchRevisionTimeline(fieldName: string, sourceId: string)
   if (!r) return null;
   return validated(RevisionTimelineSchema, r, r as RevisionTimeline);
 }
+
+// -----------------------------------------------------------------
+// T-46 extended API endpoints
+// -----------------------------------------------------------------
+
+export async function fetchPanels(): Promise<PanelSummary[]> {
+  const r = await getJson<any>("/v1/panels");
+  if (!r) return [];
+  const items = r.panels ?? r.items ?? r;
+  return Array.isArray(items) ? items : [];
+}
+
+export async function triggerPanelBuild(body: { symbols?: string[]; decision_time?: string; force_rebuild?: boolean }): Promise<AsyncTask | null> {
+  return postJson<AsyncTask>("/api/v1/panels/build", body);
+}
+
+export async function fetchSnapshots(panelId: string): Promise<SnapshotDate[]> {
+  const r = await getJson<any>(`/api/v1/panels/${encodeURIComponent(panelId)}/snapshots`);
+  if (!r) return [];
+  return Array.isArray(r) ? r : (r.snapshots ?? []);
+}
+
+export async function triggerReportBuild(body: { panel_id?: string; symbols?: string[]; language?: string }): Promise<AsyncTask | null> {
+  return postJson<AsyncTask>("/api/v1/report/build", body);
+}
+
+export async function fetchReports(): Promise<any[]> {
+  const r = await getJson<any>("/api/v1/reports");
+  if (!r) return [];
+  return Array.isArray(r) ? r : (r.reports ?? []);
+}
+
+export async function triggerBacktest(body: { strategy: string; symbols?: string[]; start_date?: string; end_date?: string; params?: Record<string, any> }): Promise<AsyncTask | null> {
+  return postJson<AsyncTask>("/api/v1/backtest/run", body);
+}
+
+export async function fetchBacktestResult(jobId: string): Promise<BacktestResult | null> {
+  return getJson<BacktestResult>(`/api/v1/backtest/${encodeURIComponent(jobId)}/results`);
+}
+
+export async function fetchTask(jobId: string): Promise<AsyncTask | null> {
+  return getJson<AsyncTask>(`/api/v1/system/tasks/${encodeURIComponent(jobId)}`);
+}
+
+export async function cancelTask(jobId: string): Promise<boolean> {
+  try {
+    const r = await fetch(`${API_BASE}/api/v1/system/tasks/${encodeURIComponent(jobId)}/cancel`, { method: "POST", cache: "no-store" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchSystemHealth(): Promise<SystemHealth | null> {
+  return getJson<SystemHealth>("/api/v1/system/health");
+}
+
+export async function fetchSystemTasks(): Promise<AsyncTask[]> {
+  const r = await getJson<any>("/api/v1/system/tasks");
+  if (!r) return [];
+  return Array.isArray(r) ? r : (r.tasks ?? []);
+}
+
+export async function triggerSync(body: { symbols?: string[]; full_refresh?: boolean }): Promise<AsyncTask | null> {
+  return postJson<AsyncTask>("/api/v1/sync", body);
+}
+
+export async function fetchRegistry(): Promise<{ instruments: RegistryEntry[]; metrics: RegistryEntry[] }> {
+  const [instruments, metrics] = await Promise.all([
+    fetchInstruments(),
+    fetchMetrics(),
+  ]);
+  return {
+    instruments: instruments.map((i) => ({
+      name: i.canonical_symbol,
+      asset_class: i.asset_class,
+      display_name_zh: i.display_name_zh,
+      type: "instrument",
+    })),
+    metrics: metrics.map((m) => ({
+      name: m.field_name,
+      display_name_zh: m.display_name_zh,
+      source: m.source_name,
+      type: "metric",
+    })),
+  };
+}
+
+export function exportCsvUrl(panelId: string): string {
+  return `${API_BASE}/api/v1/export/csv?panel_id=${encodeURIComponent(panelId)}`;
+}
+
+export function exportParquetUrl(panelId: string): string {
+  return `${API_BASE}/api/v1/export/parquet?panel_id=${encodeURIComponent(panelId)}`;
+}
+
+export const SSE_BUILD_URL = (jobId: string) =>
+  `${API_BASE}/api/v1/panels/build/stream?job_id=${encodeURIComponent(jobId)}`;
 
 // -----------------------------------------------------------------
 // SSE — see useSSEStream hook (lib/useSSEStream.ts) for the client.

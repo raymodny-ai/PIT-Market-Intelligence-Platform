@@ -404,6 +404,94 @@ export const SSEEvent = z.object({
 export type SSEEvent = z.infer<typeof SSEEvent>;
 
 // -----------------------------------------------------------------
+// T-46 extended API types
+// -----------------------------------------------------------------
+
+export const TaskStatus = z.enum(["queued", "running", "done", "failed", "cancelled"]);
+export type TaskStatus = z.infer<typeof TaskStatus>;
+
+export const AsyncTask = z.object({
+  job_id: z.string(),
+  task_type: z.string(),
+  status: TaskStatus,
+  progress: z.number().min(0).max(100).optional(),
+  message: z.string().optional(),
+  created_at: z.string(),
+  finished_at: z.string().optional(),
+  result: z.record(z.any()).optional(),
+  error: z.string().optional(),
+});
+export type AsyncTask = z.infer<typeof AsyncTask>;
+
+export const PanelBuildRequest = z.object({
+  symbols: z.array(z.string()).optional(),
+  decision_time: z.string().optional(),
+  force_rebuild: z.boolean().optional(),
+});
+export type PanelBuildRequest = z.infer<typeof PanelBuildRequest>;
+
+export const ReportBuildRequest = z.object({
+  panel_id: z.string().optional(),
+  symbols: z.array(z.string()).optional(),
+  language: z.string().default("zh"),
+});
+export type ReportBuildRequest = z.infer<typeof ReportBuildRequest>;
+
+export const BacktestRunRequest = z.object({
+  strategy: z.string(),
+  symbols: z.array(z.string()).optional(),
+  start_date: z.string().optional(),
+  end_date: z.string().optional(),
+  params: z.record(z.any()).optional(),
+});
+export type BacktestRunRequest = z.infer<typeof BacktestRunRequest>;
+
+export const SyncRequest = z.object({
+  symbols: z.array(z.string()).optional(),
+  full_refresh: z.boolean().optional(),
+});
+export type SyncRequest = z.infer<typeof SyncRequest>;
+
+export const SystemHealth = z.object({
+  status: z.string(),
+  version: z.string(),
+  storage_backend: z.string().optional(),
+  duckdb_version: z.string().optional(),
+  panel_count: z.number().int().nonnegative().optional(),
+  observation_count: z.number().int().nonnegative().optional(),
+  uptime_seconds: z.number().optional(),
+  sources: z.record(z.any()).optional(),
+});
+export type SystemHealth = z.infer<typeof SystemHealth>;
+
+export const SnapshotDate = z.object({
+  date: z.string(),
+  row_count: z.number().int().nonnegative(),
+  quality_score: z.number().optional(),
+});
+export type SnapshotDate = z.infer<typeof SnapshotDate>;
+
+export const BacktestResult = z.object({
+  total_return: z.number().optional(),
+  sharpe_ratio: z.number().optional(),
+  max_drawdown: z.number().optional(),
+  win_rate: z.number().optional(),
+  trade_count: z.number().int().optional(),
+  equity_curve: z.array(z.object({ date: z.string(), value: z.number() })).optional(),
+});
+export type BacktestResult = z.infer<typeof BacktestResult>;
+
+export const RegistryEntry = z.object({
+  name: z.string(),
+  type: z.string().optional(),
+  asset_class: z.string().optional(),
+  display_name_zh: z.string().optional(),
+  source: z.string().optional(),
+  status: z.string().optional(),
+});
+export type RegistryEntry = z.infer<typeof RegistryEntry>;
+
+// -----------------------------------------------------------------
 // Validation helpers
 // -----------------------------------------------------------------
 

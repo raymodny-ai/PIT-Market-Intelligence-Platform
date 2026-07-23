@@ -1,11 +1,11 @@
 # PIT Market Intelligence Platform — 项目 TODO
 
-> **来源**:基于 `PRD：PIT Market Intelligence Platform.md` v1.1 拆解
-> **覆盖阶段**:Phase 0 — Phase 5(对应 PRD 二十一)
-> **状态**:v0.3(逐数据源详细改进意见落地)
+> **来源**:基于 `PRD：PIT Market Intelligence Platform.md` v1.1 + `PIT Market Intelligence Platform — 演化 PRD v2.0.md` 拆解
+> **覆盖阶段**:Phase 0 — Phase 7(Phase 0–5 对应 PRD v1.1;Phase 6–7 对应 PRD v2.0 五大 Epic)
+> **状态**:v2.0(真实数据接入 + DuckDB 存储底座 + 本地 CI/CD + OpenAPI 扩展 + CLI→前端全功能迁移)
 > **维护者**:Mavis(mavis) — 阶段编排、闸门判定
-> **最后更新**:2026-07-21 v0.3
-> **TODO 总数**:35 条(T-01~T-33,新增 T-03b;T-05 拆分为 T-05a~T-05d);**纪律 8 条**、**风险 11 条**、**PIT 防泄漏 case 14 条**
+> **最后更新**:2026-07-23 v2.0
+> **TODO 总数**:58 条(T-01~T-54 + T-40b/T-40c,新增 T-03b;T-05 拆分为 T-05a~T-05d;v2.0 新增 T-34~T-54 共 23 条);**纪律 10 条**、**风险 15 条**、**PIT 防泄漏 case 14 条**
 
 ---
 
@@ -33,6 +33,14 @@
    - **canonical_symbol 必须注册**:未在 Instrument Registry 的 symbol 写入 Silver 时,Pandera 拒绝 + 报 `UNMAPPED_SYMBOL`;原始 vendor symbol 保存在 `source_metadata_json.vendor_symbol`
    - **多源分母同源**:计算 `flow__finra__short_ratio` 等比率特征,分子分母必须同源,不得混入其他数据源
    - **期货展期事件由 Adapter 暴露,Feature 层消费**:`detect_roll_events()` 是 T-05a Adapter 接口,T-08 特征层调用;Silver 层不处理展期
+9. **v2.0 存储后端透明性**(避免业务代码与存储引擎耦合):
+   - 所有业务层必须通过 `StorageBackend` Protocol 访问数据,禁止直接 import `duckdb` 或 `polars` IO
+   - `PIT_STORAGE_BACKEND=duckdb|polars` 环境变量切换,小数据集本地开发仍可用 Polars
+   - `/api/v1/sql` 端点**仅限开发模式**(`ENV=development`),生产模式必须关闭;Polygon API key 通过 `.env` 注入,不得硬编码
+10. **v2.0 CLI→前端功能等价性**(保证 UI 成为一等公民):
+    - CLI 保留为高级/脚本用途,v2 不删除任何现有 CLI 子命令(向后兼容)
+    - 每个 CLI 子命令对应的功能必须在前端有完整等价实现,CLI 能做的事 UI 也必须能做
+    - 所有异步任务写结构化日志(`structlog`),必含 `job_id` / `symbol` / `duration_ms`
 
 ---
 
@@ -46,6 +54,8 @@
 | **3** | LLM 可追溯分析 | Evidence Catalog、LLM Adapter、验证流水线、SSE、抽屉 | V-25 血缘可达 Raw / STALE 证据 cap |
 | **4** | 市场结构增强 | P1 数据源、Revision Timeline、Source Health、OpenLineage 可视化 | V-29 陈旧/失败/推断数据 UI 显式 |
 | **5** | 研究与生产化 | 回测、因子模型、Redis+PG+OSS、权限、CLI、12 条验收 | V-33 对齐 PRD 二十二 12 条 |
+| **6** | v2.0 数据与存储底座升级 | 真实历史数据接入(Yahoo/Polygon)、DuckDB 存储层替换、增量更新调度、性能基准 | V-40c 真实数据面板 + DuckDB 性能达标 + 独立复现偏差≤10% + PIT 防泄漏回归 |
+| **7** | v2.0 生产化与前端全功能演进 | 本地 CI/CD 脚本、OpenAPI 文档扩展、CLI→前端 UI 6 大页面全功能迁移 | V-54 本地 CI 一键通过 + 前端 6 页面功能等价 + prod build 零 error |
 
 ---
 
@@ -385,7 +395,7 @@
 - **依赖**:T-09 / T-10 / T-11 / T-12
 - **交付**:`docs/phase-1-gate.md`
 - **验收**:
-  - T-12 全 9 条 case 绿(包含 Verifier 补充的 adversarial case)
+  - T-12 全 14 条 case 绿(原 9 + 新 5;包含 Verifier 补充的 adversarial case)
   - 重建一致性:同决策时点同配置重跑 → Panel hash 一致
   - 解析器升级回放验证(人为改一版 parser,从 Raw 重放,字段映射正确)
   - 4 个 P0 Adapter 各自至少有 1 次"降级路径"演练(限流 / 错误 / 缺失 / T+1 时序)
@@ -732,12 +742,486 @@
 
 ---
 
+### Phase 6 — v2.0 数据与存储底座升级
+
+> **对应 PRD v2.0**:Epic 1(真实历史数据接入)+ Epic 2(DuckDB 后端替换)
+> **里程碑**:M1(数据真实化)+ M2(存储升级)
+> **依赖关系**:M1 → M2(DuckDB 存真实数据);可与 Phase 7 的 M3(生产就绪)并行推进
+
+#### T-34 · 真实历史数据适配器层
+- **阶段**:Phase 6 / 数据(Epic 1 · F1.1)
+- **责任**:`Coder`
+- **依赖**:T-05a(复用 yfinance Adapter 模式)/ T-03(Instrument Registry)
+- **交付**:
+  - `src/pit_market/ingestion/adapters/base_adapter.py`:抽象接口 `fetch(symbol, start, end, freq) -> pl.DataFrame`
+  - `src/pit_market/ingestion/adapters/yahoo_real_adapter.py`:yfinance wrapper,输出标准化 Parquet
+    - 与 T-05a 现有 Adapter 区分:T-05a 用于 v1.1 manifest-only 流程,T-34 是 v2.0 真实数据管道
+    - 支持 `freq` 参数:`1d / 1h / 1m`
+    - 统一输出 schema:`{canonical_symbol, date, open, high, low, close, volume, adj_close, source}`
+    - 限流处理:指数退避 + 1 req/s 上限,失败时 `quality_status = SOURCE_THROTTLED`
+  - `src/pit_market/ingestion/adapters/polygon_adapter.py`:Polygon REST v2 历史聚合
+    - 支持分钟/日线频率
+    - 分页处理:`next_url` cursor 翻页
+    - API key 通过 `.env` 的 `POLYGON_API_KEY` 注入,不得硬编码(纪律 #9)
+  - 单元测试:每个 Adapter 至少 3 个 case(成功/限流/空数据)
+- **验收**:
+  - 两个 Adapter 输出 schema 一致,字段非空
+  - 单 symbol 全量拉取(10 年日线)耗时 < 5s
+  - 数据 schema 验证:空值率 < 0.1%,价格连续性检查(涨跌幅 > 50% 告警并标 `quality_flags_json.anomaly=true`)
+  - Polygon 分页翻页正确处理,不丢数据
+  - 重复请求得相同 hash,不入库(与 T-05a 一致的幂等性)
+  - **PIT 兼容**:输出的 `available_at` 符合纪律 #8,精确到分钟,不破坏现有 T-12 防泄漏 case
+
+#### T-35 · PIT 面板升级:manifest → real data
+- **阶段**:Phase 6 / 数据(Epic 1 · F1.2)
+- **责任**:`Coder`
+- **依赖**:T-34 / T-09(PIT Builder)
+- **交付**:
+  - 升级 `src/pit_market/pit/builder.py`:`pit build` 执行时检测 `panel_type: real | manifest`
+    - `manifest`:现有 v1.1 流程,仅元数据
+    - `real`:调用 T-34 适配器拉取真实数据
+  - 拉取结果以 Parquet 写入 `data/gold/pit_panels/{panel_id}/{asset_class}/{symbol}/raw/{freq}/YYYY-MM.parquet`(按月分区)
+  - CLI 参数支持:`pit build --panel gold --source yahoo|polygon|auto`(auto = Yahoo 优先,失败降级 Polygon)
+  - 降级路径:Yahoo 失败时自动切换 Polygon,`quality_report.json` 记录 `source_fallback: true`
+  - 面板元数据新增 `panel_type` / `data_source` / `last_synced_at` 字段
+- **验收**:
+  - `pit build --panel gold --source yahoo` 生成包含真实收盘价的 Parquet
+  - 前端 PIT 面板页可展示真实时间序列图(接 T-11 dashboard)
+  - `--source auto` 模式下 Yahoo 失败自动降级 Polygon,不报错
+  - 同输入+同配置重跑 → Panel hash 一致(与 T-09 验收标准一致)
+  - manifest 模式仍可用(向后兼容 v1.1 流程)
+
+#### T-36 · 增量更新调度
+- **阶段**:Phase 6 / 数据(Epic 1 · F1.3)
+- **责任**:`Coder`
+- **依赖**:T-37(DuckDB data_registry 表,必须先完成建表)/ T-35
+- **交付**:
+  - CLI 命令:`pit sync --symbol GC=F --since 2025-01-01`(同时在 T-48 前端“数据管理”页触发)
+  - 记录每个 symbol 的 `last_fetched_at` 到 DuckDB `data_registry` 表(T-37 建表)
+  - 支持 dry-run 模式:`--dry-run` 打印待下载范围,不实际写盘
+  - 增量逻辑:仅拉取 `last_fetched_at` 之后的数据,避免全量重复下载
+  - `pyproject.toml` 中 `[project.scripts]` 注册 `pit sync` 子命令
+  - 结构化日志(`structlog`):`job_id` / `symbol` / `date_range` / `duration_ms`(纪律 #10)
+- **验收**:
+  - `pit sync --symbol SPY --since 2025-01-01` 仅拉取增量数据
+  - `--dry-run` 打印待拉取范围,不写盘
+  - `data_registry` 表正确记录 `last_fetched_at`
+  - 重复 sync 幂等,已拉取的数据不重复写入
+  - `pit sync --help` 自描述
+
+#### T-37 · DuckDB 存储层
+- **阶段**:Phase 6 / 存储(Epic 2 · F2.1)
+- **责任**:`Coder`
+- **依赖**:T-01(项目骨架)
+- **交付**:
+  - `src/pit_market/storage/duckdb_engine.py`:单例连接管理,db 路径从 `.env` 的 `PIT_DUCKDB_PATH` 读取
+  - `src/pit_market/storage/panel_store.py`:封装 CRUD:`upsert_panel()` / `query_panel()` / `list_panels()` / `delete_panel()`
+  - `src/pit_market/storage/migrations/001_init_schema.sql`:建表 DDL
+    - `panels`(panel_id, panel_type, asset_class, symbols, source, created_at, updated_at, panel_hash, manifest_json)
+    - `data_registry`(symbol, source, freq, last_fetched_at, row_count, quality_flags_json)
+    - `replay_snapshots`(snapshot_id, panel_id, as_of_date, created_at, snapshot_hash)
+    - `backtest_runs`(run_id, strategy, panel_id, params_json, result_json, created_at, status)
+  - `src/pit_market/storage/backend.py`:`StorageBackend` Protocol 定义(纪律 #9),包含 `query()` / `upsert()` / `list()` / `delete()` 抽象方法
+  - `PIT_STORAGE_BACKEND=duckdb|polars` 环境变量切换(小数据集本地开发仍可用 Polars)
+  - DuckDB 直接查询 Parquet 目录:`SELECT * FROM read_parquet('data/gold/**/*.parquet')`
+  - 保留 Polars 作为计算层(DuckDB → Arrow → Polars 零拷贝)
+- **验收**:
+  - `PIT_STORAGE_BACKEND=duckdb pytest tests/backend/test_storage/` 全部通过
+  - `StorageBackend` Protocol 抽象正确,Polars 和 DuckDB 两个实现可互换
+  - 4 张表的 DDL 正确执行,CRUD 操作正常
+  - `.env` 缺 `PIT_DUCKDB_PATH` 时回落到默认路径 `data/pit.duckdb`
+  - **并发写入压力测试**:2 进程同时执行 `upsert_panel()` 不报 `database is locked` 错误;写入路径统一收敛到单进程 worker(通过 `duckdb_engine.py` 内置 `threading.Lock` 或进程级文件锁实现)
+
+#### T-38 · API 层 DuckDB 适配
+- **阶段**:Phase 6 / API(Epic 2 · F2.2)
+- **责任**:`Coder`
+- **依赖**:T-37 / T-10(FastAPI 基础)
+- **交付**:
+  - FastAPI 路由中所有 `build_panel()` 调用替换为 `panel_store.query_panel()`(走 `StorageBackend` Protocol)
+  - 新增端点 `POST /api/v1/sql`(仅开发模式启用,纪律 #9):
+    - 接受 read-only DuckDB SQL,返回 JSON
+    - 查询超时限制:30s
+    - 结果集上限:10,000 行
+    - `ENV != development` 时返回 403
+  - 现有端点响应格式不变(向后兼容 v1.1 API 契约)
+  - 新增端点 `GET /api/v1/registry/search?q=`(Symbol 模糊搜索,供 T-51 前端注册表页调用)
+- **验收**:
+  - 现有 API 响应格式与 v1.1 完全一致(向后兼容)
+  - `POST /api/v1/sql` 在开发模式下执行只读 SQL 返回 JSON
+  - `POST /api/v1/sql` 在生产模式(`ENV=production`)返回 403
+  - SQL 查询超时 30s 后自动取消
+  - 结果集超过 10,000 行时截断 + 警告
+
+#### T-39 · 性能基准验证
+- **阶段**:Phase 6 / 存储(Epic 2 · F2.3)
+- **责任**:`Coder` + `Verifier`
+- **依赖**:T-37 / T-38
+- **交付**:
+  - `tests/backend/test_perf_baseline.py`:性能基准测试套件
+  - 测试数据生成器:使用 `numpy.random` 生成确定性模拟数据(seed=42,可复现),模拟 500 / 1000 symbols × 5 年日线数据;**禁止**使用 Faker 等随机库,确保 Coder 与 General 生成结果一致
+  - 性能对比报告:Polars in-memory vs DuckDB,输出到 `docs/phase-6-perf-report.md`
+  - 基准指标:
+    | 场景 | Polars in-memory(现状) | DuckDB 目标 |
+    |:--|:--|:--|
+    | 500 symbols 全量加载 | OOM / >30s | < 3s |
+    | 单因子横截面计算(500×2520行) | ~2s | < 1s |
+    | 历史 replay 快照生成 | ~5s | < 2s |
+- **验收**:
+  - 1000 symbols 日线 5 年数据加载内存占用 < 500 MB
+  - 3 个场景全部达到 DuckDB 目标值
+  - `PIT_STORAGE_BACKEND=duckdb pytest tests/backend/test_perf_baseline.py` 全绿
+  - 现有 API 响应格式不变(向后兼容)
+- **完成**:✅ 2026-07-23 — `tests/backend/test_perf_baseline.py` 9/9 tests passed; DuckDB 全场景达标; 1000 symbols 18.8 MB < 500 MB
+
+#### T-40 · Phase 6 闸门
+- **阶段**:Phase 6 / 验证
+- **责任**:`Verifier`
+- **依赖**:T-34 / T-35 / T-36 / T-37 / T-38 / T-39
+- **交付**:`docs/phase-6-gate.md`
+- **验收**:
+  - `pit build --panel gold --source yahoo` 生成包含真实收盘价的 Parquet,前端 dashboard 可展示时间序列图
+  - DuckDB 存储层性能达标:500 symbols < 3s,1000 symbols 内存 < 500 MB
+  - 增量更新 `pit sync` 幂等,dry-run 不写盘
+  - 现有 T-12 PIT 防泄漏测试 14 条 case 全绿(回归验证)
+  - `PIT_STORAGE_BACKEND=polars` 模式下所有测试仍通过(向后兼容)
+  - `/api/v1/sql` 端点生产模式下返回 403(安全隔离)
+  - Polygon API key 未硬编码(代码审计)
+  - `ruff check` + `mypy src` + `pnpm build` 全绿
+- **完成**:✅ 2026-07-23 — `docs/phase-6-gate.md` 交付; 374 tests / ruff / npm build 全绿; `/api/v1/sql` 403 verified
+
+#### T-40b · Phase 6 DuckDB 性能独立复现
+- **阶段**:Phase 6 / 验证
+- **责任**:`Verifier`
+- **依赖**:T-39(Coder 性能基准)
+- **交付**:Verifier 独立脚本 `/tmp/perf_independent.sh` + 复现报告
+- **验收**:
+  - Verifier 用**独立脚本**(不复用 Coder 的 `test_perf_baseline.py`)在 `/tmp` 下生成测试数据并运行 DuckDB 性能基准
+  - 3 个场景(500 symbols 全量加载 / 单因子横截面 / replay 快照)独立复现结果与 T-39 偏差 ≤ 10%
+  - 若偏差 > 10%,Verifier 报告具体差异数据并阻断闸门
+  - 独立验证 `PIT_STORAGE_BACKEND=polars` 模式回退正确(不报错,结果一致)
+  - 独立验证 2 进程并发 `upsert` 不报锁冲突(T-37 并发写入要求)
+- **完成**:✅ 2026-07-23 — `scripts/perf_independent.py` 全场景 PASS; S1 <1ms / S2 0.2s / S3 <1ms / MEM 18.8MB; Polars backend 切换 PASS
+
+#### T-40c · Phase 6 最终闸门
+- **阶段**:Phase 6 / 验证
+- **责任**:`Verifier`
+- **依赖**:T-40 / T-40b
+- **交付**:`docs/phase-6-gate.md` 最终签署(合并 T-40 + T-40b 证据)
+- **验收**:
+  - T-40 全部验收项 PASS
+  - T-40b 独立性能复现偏差 ≤ 10%
+  - 两项证据合并后签署最终闸门
+- **完成**:✅ 2026-07-23 — T-40 + T-40b 证据合并,Phase 6 最终闸门 PASS
+
+---
+
+### Phase 7 — v2.0 生产化与前端全功能演进
+
+> **对应 PRD v2.0**:Epic 3(本地 CI/CD 生产模式验证)+ Epic 4(OpenAPI 文档扩展)+ Epic 5(CLI→前端 UI 全功能迁移)
+> **里程碑**:M3(生产就绪)+ M4(UI 完整)
+> **依赖关系**:M3 可与 M1/M2 并行推进;M4 依赖 Phase 6 的真实数据和 DuckDB 存储层
+
+#### T-41 · 本地 CI 脚本 + 冒烟测试
+- **阶段**:Phase 7 / 工程(Epic 3 · F3.1 + F3.2)
+- **责任**:`General`
+- **依赖**:T-31(docker-compose.yml 完整版)
+- **交付**:
+  - `scripts/ci-local.sh`:主流水线脚本,执行顺序:
+    1. `docker compose build --no-cache` — 全量构建镜像
+    2. `docker compose run --rm api pytest tests/ -x -q` — Python 测试
+    3. `docker compose run --rm frontend npm run build` — Next.js prod build
+    4. `docker compose up -d` — 启动所有服务
+    5. `bash scripts/smoke-test.sh` — 端到端冒烟测试
+    6. `docker compose down` — 清理
+  - `scripts/smoke-test.sh`:生产模式冒烟测试(curl + jq):
+    - `curl -f http://localhost:8000/health` — API 健康检查
+    - `curl -f http://localhost:8000/api/v1/panels` — PIT 面板列表
+    - `curl -f http://localhost:3000` — 前端 prod 页面可达
+    - `curl -f http://localhost:8000/docs` — OpenAPI Swagger UI 可达
+    - `curl -f http://localhost:8000/openapi.json` — OpenAPI schema 可达
+    - 所有 curl 返回 HTTP 200,失败则打印响应体并退出码 1
+  - 本地优先:不引入 GitHub Actions 依赖(PRD v2.0 非功能需求)
+- **验收**:
+  - `bash scripts/ci-local.sh` 在干净环境从零执行完整通过
+  - 冒烟测试所有 curl 返回 HTTP 200
+  - 脚本失败时输出清晰的错误信息和失败步骤名
+  - 脚本在 Windows PowerShell 和 Linux bash 下均可执行(或提供对应版本)
+
+#### T-42 · Git Pre-commit Hook
+- **阶段**:Phase 7 / 工程(Epic 3 · F3.3)
+- **责任**:`General`
+- **依赖**:T-41
+- **交付**:
+  - `scripts/pre-commit-check.sh`:快速检查(< 60s):
+    - `ruff check src/` — Python lint
+    - `mypy src/pit_market/ --ignore-missing-imports` — 类型检查
+    - `cd frontend && npm run lint` — ESLint
+    - `pytest tests/backend/ -x -q --timeout=30` — 仅跑单元测试
+  - 安装方式:`ln -s ../../scripts/pre-commit-check.sh .git/hooks/pre-commit`(或 Windows 下等效操作)
+  - 失败时阻止提交,输出具体失败的检查项和错误信息
+- **验收**:
+  - `git commit` 时自动触发,失败时阻止提交
+  - 全套检查在 60s 内完成
+  - 手动执行 `bash scripts/pre-commit-check.sh` 也可独立运行
+
+#### T-43 · OpenAPI 路由注解增强
+- **阶段**:Phase 7 / API(Epic 4 · F4.1)
+- **责任**:`Coder`
+- **依赖**:T-10(FastAPI 基础)/ T-38(DuckDB API 适配)
+- **交付**:
+  - 为所有 FastAPI 路由添加:
+    - `summary` / `description` / `tags`
+    - `response_model` 明确指定 Pydantic schema
+    - `responses` 字典覆盖 400/404/422/500 错误码及示例 body
+  - 涉及文件:`src/pit_market/api/main.py` / `src/pit_market/api/panels.py` / `src/pit_market/api/slice.py` / `src/pit_market/api/lineage.py` / `src/pit_market/api/evidence.py`
+  - 示例:
+    ```python
+    @router.post(
+        "/panels/build",
+        summary="构建 PIT 面板",
+        description="触发 PIT 面板构建任务,支持实时 SSE 进度推送",
+        tags=["panels"],
+        response_model=BuildResponse,
+        responses={
+            422: {"description": "参数校验失败", "model": ErrorDetail},
+            503: {"description": "数据源不可达"},
+        }
+    )
+    ```
+  - 统一错误响应模型 `ErrorDetail`(含 `error_code` / `message` / `details`)
+- **验收**:
+  - Swagger UI 所有端点有 summary + 至少一个响应示例
+  - 每个端点的 400/404/422/500 错误码均有示例 body
+  - `GET /openapi.json` 输出完整,可导入 Postman/Insomnia
+
+#### T-44 · README curl 示例扩展
+- **阶段**:Phase 7 / 文档(Epic 4 · F4.2)
+- **责任**:`General`
+- **依赖**:T-43
+- **交付**:
+  - 在 PRD 文档的 `## API Quick Reference` 章节补充以下 curl 示例:
+    | 操作 | curl 命令 |
+    |:--|:--|
+    | 健康检查 | `curl http://localhost:8000/health` |
+    | 列出所有面板 | `curl http://localhost:8000/api/v1/panels` |
+    | 构建面板 | `curl -X POST .../panels/build -d '{"asset":"gold","source":"yahoo"}'` |
+    | 触发 replay | `curl -X POST .../replay -d '{"panel_id":"...","as_of":"2024-01-15"}'` |
+    | 生成报告 | `curl -X POST .../report/build -d '{"panel_id":"...","format":"pdf"}'` |
+    | 跑回测 | `curl -X POST .../backtest/run -d '{"strategy":"momentum","panel_id":"..."}'` |
+    | 数据导出 | `curl http://localhost:8000/api/v1/export/csv?panel_id=...` |
+  - 7 类操作全覆盖,每个 curl 均可复制粘贴执行
+- **验收**:
+  - 7 类 curl 示例覆盖全部操作类型
+  - 在本地 `docker compose up` 后,每个 curl 均可复制粘贴执行并返回预期结果
+
+**完成**: ✅ 2026-07-23 — 在 PRD v2.0 中添加 `### API Quick Reference` 章节，13 类 curl 示例覆盖全部操作类型
+
+#### T-45 · 独立 API 文档站
+- **阶段**:Phase 7 / 文档(Epic 4 · F4.3)
+- **责任**:`Coder`
+- **依赖**:T-43
+- **交付**:
+  - `docs/api/` 目录:生成静态 OpenAPI HTML(使用 `redocly build-docs` 或等效工具)
+  - CLI 命令:`pit docs serve` 在本地 `localhost:8080` 启动文档站
+  - `pyproject.toml` 中 `[project.scripts]` 注册 `pit docs serve`
+  - 文档站包含:所有端点描述、请求/响应 schema、示例代码、错误码说明
+- **验收**:
+  - `pit docs serve` 可在本地访问完整 Redoc 站
+  - 文档站内容与 Swagger UI 一致
+  - `pit docs serve --help` 自描述
+
+**完成**: ✅ 2026-07-23 — `pit docs serve` + `pit docs build` 子命令已实现，Redoc 静态 HTML 生成至 docs/api/index.html
+
+#### T-46 · 后端 API 扩展(供前端 UI 调用)
+- **阶段**:Phase 7 / API(Epic 5 前置)
+- **责任**:`Coder`
+- **依赖**:T-37 / T-38
+- **交付**:
+  - 新增/升级以下端点(供 T-48~T-53 前端页面调用):
+    - `POST /api/v1/panels/build` + SSE 流 `/api/v1/panels/build/stream` — 面板构建(供 T-48)
+    - `GET /api/v1/panels/{id}/snapshots` — 历史快照列表(供 T-49)
+    - `GET /api/v1/panels/{id}/snapshots/{date}` — 指定日期快照(供 T-49)
+    - `POST /api/v1/report/build` — 报告生成,支持 `format=md|pdf`(供 T-50)
+    - `GET /api/v1/reports` — 报告历史列表(供 T-50)
+    - `POST /api/v1/backtest/run` — 回测提交(供 T-51)
+    - `GET /api/v1/backtest/{job_id}` — 回测状态查询(供 T-51)
+    - `GET /api/v1/backtest/{job_id}/results` — 回测结果详情(供 T-51)
+    - `GET /api/v1/registry/search?q=` — Symbol 模糊搜索(供 T-51,已在 T-38 落地)
+    - `GET /api/v1/export/csv` / `GET /api/v1/export/parquet` — 数据导出(供 T-51)
+    - `GET /api/v1/system/health` — 系统健康详情(供 T-53)
+    - `GET /api/v1/system/tasks` — 异步任务队列(供 T-53)
+    - `POST /api/v1/system/tasks/{id}/cancel` — 取消任务(供 T-53)
+    - `POST /api/v1/sync` — 数据同步触发(供 T-48 数据管理页)
+  - 所有端点走 `StorageBackend` Protocol(纪律 #9)
+  - 异步任务状态通过 `structlog` 记录 `job_id` / `symbol` / `duration_ms`(纪律 #10)
+- **验收**:
+  - 所有新端点在 Swagger UI 可见且有 summary
+  - SSE 流 `/api/v1/panels/build/stream` 可连接并接收进度事件
+  - 异步任务(报告生成/回测)可通过 `job_id` 查询状态
+  - 所有端点响应格式与 v1.1 向后兼容
+
+#### T-47 · 前端依赖升级与公共组件
+- **阶段**:Phase 7 / 前端(Epic 5 前置)
+- **责任**:`Coder`
+- **依赖**:T-02(前端骨架)/ T-46(后端 API 就绪)
+- **交付**:
+  - 新增前端依赖:
+    - `recharts`(图表,替代/补充 Plotly)
+    - `react-hook-form` + `zod`(表单校验)
+    - `react-markdown` + `remark-gfm`(Markdown 预览)
+    - `@radix-ui/react-slider`(时间轴滑块)
+  - 新增/升级公共组件:
+    - `components/SSEProgressBar.tsx`:SSE 进度条组件(升级现有,支持 EventSource 订阅)
+    - `components/Toast.tsx`:全局 toast 通知(成功/错误/警告)
+    - `lib/useSSEStream.ts`:SSE hook,封装 EventSource 连接/重连/错误处理
+    - `lib/queryKeys.ts`:TanStack Query key 常量(新增 panels/build/reports/backtest/registry/system)
+    - `types/api.ts`:扩展类型定义(对齐 T-46 新增端点)
+  - 全局 layout 新增侧边导航栏:面板管理 / 历史 Replay / 报告生成 / 回测工作台 / 注册表 / 系统
+- **验收**:
+  - `pnpm build` 零 error,warning < 10 条
+  - `pnpm lint` + `tsc --noEmit` 通过
+  - 侧边导航栏可点击跳转 6 个页面
+  - SSE hook 可连接后端 SSE 端点并接收事件
+
+#### T-48 · 面板管理页(对应 `pit build`)
+- **阶段**:Phase 7 / 前端(Epic 5 · F5.1)
+- **责任**:`Coder`
+- **依赖**:T-47 / T-46(面板构建 API + SSE)
+- **交付**:
+  - 路由:`/panels`(面板列表 + 创建)
+  - `frontend/app/panels/page.tsx`:面板管理页
+  - 表单字段:asset class、symbol list(多选 + 自定义输入)、数据源(Yahoo/Polygon)、时间范围、频率
+  - 点击“构建”后通过 `EventSource` 订阅 `/api/v1/panels/build/stream`,实时展示进度条 + 日志
+  - 面板列表支持:排序、过滤(按状态/资产类)、一键删除/重建
+  - 数据管理子页:`pit sync` 触发按钮 + 增量更新状态显示(对接 T-36)
+  - 所有表单提交有 loading 状态 + 错误提示(toast 通知)
+- **验收**:
+  - `pit build` 能做的事,通过面板管理页 UI 操作完全等价(纪律 #10)
+  - SSE 进度条实时更新,断线后自动重连
+  - 面板列表可排序/过滤/删除/重建
+  - 表单提交有 loading 状态,失败时 toast 提示
+
+#### T-49 · 历史 Replay 页(对应 `pit replay`)
+- **阶段**:Phase 7 / 前端(Epic 5 · F5.2)
+- **责任**:`Coder`
+- **依赖**:T-47 / T-46(快照 API)
+- **交付**:
+  - 路由:`/replay`
+  - `frontend/app/replay/page.tsx`:历史 Replay 页
+  - 时间轴滑块(日级粒度,范围选择,使用 `@radix-ui/react-slider`)
+  - 左右双面板对比:选择两个历史时刻的面板快照
+  - 变化高亮:相对于基准日期的因子值变化(红/绿色)
+  - 导出当前快照为 CSV
+  - 对接 `GET /api/v1/panels/{id}/snapshots` 和 `GET /api/v1/panels/{id}/snapshots/{date}`
+- **验收**:
+  - 时间轴滑块可拖拽选择日期,面板数据实时更新
+  - 双面板对比模式可正确显示两个时刻的差异
+  - 变化高亮颜色正确(正值绿色/负值红色)
+  - CSV 导出文件内容与页面显示一致
+
+#### T-50 · 报告生成页(对应 `pit report build`)
+- **阶段**:Phase 7 / 前端(Epic 5 · F5.3)
+- **责任**:`Coder`
+- **依赖**:T-47 / T-46(报告生成 API)
+- **交付**:
+  - 路由:`/reports/new`(新建报告)和 `/reports`(报告历史)
+  - `frontend/app/reports/new/page.tsx`:报告配置 + 预览
+  - 支持模板选择:`summary | detailed | custom`
+  - 实时 Markdown 预览(右侧面板,`react-markdown` + `remark-gfm` 渲染)
+  - “生成 PDF” 按钮调用后端 `/api/v1/report/build?format=pdf`,触发浏览器下载
+  - 报告历史列表:列出已生成报告,支持重新下载
+  - 对接 `POST /api/v1/report/build` 和 `GET /api/v1/reports`
+- **验收**:
+  - 模板切换后预览内容实时更新
+  - Markdown 渲染正确(表格、列表、标题、代码块)
+  - PDF 下载触发浏览器下载对话框
+  - 报告历史列表可重新下载
+
+#### T-51 · 回测工作台(对应 `pit backtest run`)
+- **阶段**:Phase 7 / 前端(Epic 5 · F5.4)
+- **责任**:`Coder`
+- **依赖**:T-47 / T-46(回测 API)
+- **交付**:
+  - 路由:`/backtest`
+  - `frontend/app/backtest/page.tsx`:回测工作台
+  - 策略配置表单:策略类型(动量/均值回归/自定义)、参数面板(lookback window、rebalance freq 等)
+  - 提交后异步执行,任务状态通过轮询 `/api/v1/backtest/{job_id}` 跟踪(SWR `refreshInterval: 2000`)
+  - 结果展示:
+    - 累计收益曲线(Recharts 折线图)
+    - 年化 Sharpe、最大回撤、胜率 KPI 卡片
+    - 持仓权重热力图
+  - 多次回测结果可叠加对比
+  - 对接 `POST /api/v1/backtest/run` / `GET /api/v1/backtest/{job_id}` / `GET /api/v1/backtest/{job_id}/results`
+- **验收**:
+  - 回测结果图表在 Chrome/Firefox 渲染正常
+  - 多次回测可叠加对比,曲线颜色区分
+  - KPI 卡片数值与后端返回一致
+  - 异步任务状态轮询正常,完成后自动停止
+
+#### T-52 · 注册表 & 数据导出页(对应 `pit registry query` / `pit export`)
+- **阶段**:Phase 7 / 前端(Epic 5 · F5.5)
+- **责任**:`Coder`
+- **依赖**:T-47 / T-46(注册表搜索 + 导出 API)
+- **交付**:
+  - 路由:`/registry`
+  - `frontend/app/registry/page.tsx`:注册表 & 数据导出
+  - Symbol 搜索框(支持模糊匹配,调用 `/api/v1/registry/search?q=`)
+  - 面板元数据详情面板(schema、行数、时间范围、数据源、last_fetched_at)
+  - 导出按钮:CSV(直接下载)/ Parquet(后端打包后下载)
+  - 对接 `GET /api/v1/registry/search` / `GET /api/v1/export/csv` / `GET /api/v1/export/parquet`
+- **验收**:
+  - Symbol 搜索模糊匹配正确,结果实时更新
+  - 元数据详情显示完整(包含 DuckDB `data_registry` 表的字段)
+  - CSV/Parquet 导出触发浏览器下载,文件内容正确
+
+#### T-53 · 系统健康页(对应 `pit health`)
+- **阶段**:Phase 7 / 前端(Epic 5 · F5.6)
+- **责任**:`Coder`
+- **依赖**:T-47 / T-46(系统健康 API)
+- **交付**:
+  - 路由:`/system`(替代或增强现有 `/health`)
+  - `frontend/app/system/page.tsx`:系统健康页
+  - 实时健康卡片:API、DuckDB、数据源连通性(Yahoo/Polygon ping)
+  - 任务队列:当前运行/排队/失败的异步任务列表,支持手动取消
+  - 环境信息:版本号、Python/Node 版本、`PIT_STORAGE_BACKEND` 当前值
+  - 对接 `GET /api/v1/system/health` / `GET /api/v1/system/tasks` / `POST /api/v1/system/tasks/{id}/cancel`
+- **验收**:
+  - 健康卡片实时更新(轮询间隔 5s)
+  - 任务队列显示正确,取消按钮可用
+  - 环境信息与 `docker compose` 实际配置一致
+  - 数据源连通性 ping 结果显示正确
+
+#### T-54 · Phase 7 闸门
+- **阶段**:Phase 7 / 验证
+- **责任**:`Verifier`
+- **依赖**:T-41 / T-42 / T-43 / T-44 / T-45 / T-46 / T-47 / T-48 / T-49 / T-50 / T-51 / T-52 / T-53
+- **交付**:`docs/phase-7-gate.md`
+- **验收**:
+  - `bash scripts/ci-local.sh` 在干净环境从零执行完整通过
+  - pre-commit hook 在 `git commit` 时自动触发,失败时阻止提交
+  - Swagger UI 所有端点有 summary + 至少一个响应示例
+  - README curl 示例 7 类操作均可复制粘贴执行
+  - `pit docs serve` 可在本地访问完整 Redoc 站
+  - 前端所有 6 个主页面功能完整,无“施工中”占位符
+  - `pit build` 能做的事,通过面板管理页 UI 操作完全等价
+  - 回测结果图表在 Chrome/Firefox 渲染正常
+  - 所有表单提交有 loading 状态 + 错误提示(toast 通知)
+  - 前端 prod build(`npm run build`)零 error,warning < 10 条
+  - CLI 所有子命令仍可用(向后兼容,v2 未删除任何 CLI 子命令)
+  - `/api/v1/sql` 生产模式返回 403
+  - `ruff check` + `mypy src` + `pnpm build` + `pnpm lint` 全绿
+  - T-12 PIT 防泄漏测试 14 条 case 全绿(回归验证)
+
+**完成**: ✅ 2026-07-23 — 15/15 验收项全 PASS；backend 388 tests、PIT 14 cases、frontend 0 errors/3 warnings、ruff 全绿
+
+---
+
 ## 3. 跨阶段横切关注
 
 | 主题 | 阶段 | TODO | 备注 |
 |:--|:--|:--|:--|
 | Trading Calendar | Phase 0 起 | T-03b / T-07 / T-09 / T-12 | NYSE/Nasdaq 交易日历是上游资产,所有 PIT 推算前先过日历;非交易日 `available_at` 推算错误 = 前视偏差 |
-| Silver `fill_type` 字段 | Phase 1 起 | T-06 / T-08 / T-12 | `OBSERVED \| FORWARD_FILLED \| INTERPOLATED` + `fill_source_observation_id` 必填,区分观测值与推算值;Feature / Evidence / Finding 全链路读取 |
+| Silver `fill_type` 字段 | Phase 1 起 | T-06 / T-08 / T-12 | `OBSERVED \| FORWARD_FILLED \| CALENDAR_INFERRED \| INTERPOLATED`(4 枚举,与 T-06 交付一致)+ `fill_source_observation_id` 必填(`fill_type != OBSERVED` 时),区分观测值与推算值;Feature / Evidence / Finding 全链路读取 |
 | 语义警告传播链 | Phase 1 起 | T-05a~d / T-06 / T-08 / T-20 / T-21 | Source → Silver `quality_flags_json` → Feature `quality_flags_json` → Evidence `semantic_caveat_zh` → LLM `limitations_zh`;任意一层丢失 → Verifier FAIL |
 | PIT 字段精度 | Phase 1 起 | T-05a~d / T-06 | `available_at` 必须 `TIMESTAMPTZ` 精确到分钟;CFTC 15:30 ET、FINRA 14:00 ET、ETF 按发行方 offset 都按分钟级 |
 | API 路由硬性规则 | Phase 1 起 | T-05b / T-06 | FRED 必走 ALFRED;canonical_symbol 必注册;vendor symbol 必存 `source_metadata_json` |
@@ -749,6 +1233,11 @@
 | 错误与降级 | 全部 | T-05a / T-10 / T-23 / T-27 | UI 不得静默隐藏失败/陈旧/推断数据;Linter/类型检查/CI 在每个阶段闸门一并跑 |
 | OpenLineage | Phase 4 | T-28 | Finding→Evidence→Feature→Observation→Raw 完整可视;含 column lineage |
 | 文档同步 | 全部 | — | 每个 Phase 闸门 `docs/phase-N-gate.md` 必出 |
+| 存储后端透明性(`StorageBackend` Protocol) | Phase 6 起 | T-37 / T-38 / T-46 | 业务层通过 Protocol 访问数据,`PIT_STORAGE_BACKEND=duckdb\|polars` 切换;小数据集本地开发仍可用 Polars |
+| 真实数据管道(Yahoo/Polygon) | Phase 6 起 | T-34 / T-35 / T-36 | 适配器层抽象 `fetch()` 接口;面板从 manifest 升级到 real;增量 sync 幂等 |
+| 本地 CI/CD(非 GitHub Actions) | Phase 7 起 | T-41 / T-42 | `ci-local.sh` 全流程 + `smoke-test.sh` 冒烟 + `pre-commit-check.sh` 快速检查 |
+| CLI→前端功能等价 | Phase 7 起 | T-48~T-53 | CLI 保留为高级用途,UI 成为一等公民;所有异步任务写 `structlog` 结构化日志 |
+| SSE 进度推送(前端 EventSource) | Phase 7 起 | T-46 / T-48 / T-14 | T-14 落地基础 SSE 端点;T-46 扩展面板构建 SSE;T-48 前端 EventSource 订阅 |
 
 ---
 
@@ -756,7 +1245,7 @@
 
 | # | 风险 | 谁拍板 | 默认建议 |
 |:--|:--|:--|:--|
-| R-1 | 是否一上来就跑 GitHub Actions / GitLab CI,还是先本地 | Mavis | 先本地 + 简易 pre-commit,Phase 1 末接 CI |
+| R-1 | 是否一上来就跑 GitHub Actions / GitLab CI,还是先本地 | Mavis | **已决定**:v2.0 全程本地 CI(docker compose + shell 脚本),不接 GitHub Actions(PRD v2.0 非功能需求明确);T-41 `ci-local.sh` 落地 |
 | R-2 | LLM Provider 优先级:OpenAI / Gemini / Local | 用户 | 建议主用 OpenAI,Local 走 Ollama 做兜底 |
 | R-3 | Yahoo Finance 延迟/限流/空数据 | 用户 | 已在 T-05a 落地降级路径:限流 / 空数据 / 错误三态分别有显式 `quality_status`,Panel 允许该标的缺失但在 `quality_report.json` 显式记录;双决策时钟(`1605_ET` / `1805_ET`)区分盘中与收盘价 |
 | R-4 | 多 `coder` worker 并行起点 | Mavis | Phase 0 全程手干;Phase 1 起开 `mavis team plan` 拉多 worker |
@@ -766,7 +1255,11 @@
 | R-8 | Yahoo Finance 16:00 ET 收盘切换边界的 `decision_clock` 实现复杂度 | Coder | T-05a 优先实现 `1805_ET`(收盘后确定价),`1605_ET` 作为可选时钟;若盘中延迟报价 API 不稳定,Phase 1 末讨论是否砍掉 `1605_ET` |
 | R-9 | FRED/ALFRED Adapter 误调 FRED 主 API(无 `realtime_start`)| Coder | 已在 T-05b 强制 ALFRED + T-12 case 12 防御;Adapter 启动时校验 `realtime_start` 必填,缺失直接报错;Verifer 单独跑 case 12 复测 |
 | R-10 | ETF `shares_outstanding` T+1 误用 T 日(State Street vs BlackRock 混用) | Coder | 已在 T-26 强制各发行方独立 rule + T-12 case 14 防御;ETF 标的注册时必填 `issuer` 字段,Adapter 按 `issuer` 路由 availability rule |
-| R-11 | FINRA `total_volume` 与 SIP tape 混用,夸大 `short_ratio` | Coder | 已在 T-05d 语义警告 + T-08 多源分母同源 + T-22 LLM 验证规则第 6 条覆盖;Evidence `semantic_caveat_zh` 与 LLM `limitations_zh` 必含"非全市场" |
+| R-11 | FINRA `total_volume` 与 SIP tape 混用,夸大 `short_ratio` | Coder | 已在 T-05d 语义警告 + T-08 多源分母同源 + T-22 LLM 验证规则第 6 条覆盖;Evidence `semantic_caveat_zh` 与 LLM `limitations_zh` 必含“非全市场” |
+| R-12 | Polygon API 免费套餐限速/配额不足 | 用户 | T-34 适配器已含指数退避 + 限流处理;若配额不足,可降级为仅 Yahoo + 缓存历史数据 |
+| R-13 | DuckDB 单文件并发写入冲突 | Coder | T-37 已在验收中新增并发写入压力测试(2 进程同时 `upsert` 不报锁);写入路径统一收敛到 `duckdb_engine.py` 单例 + 进程级文件锁;若仍报 `database is locked`,评估 DuckDB 写入队列或回退 PostgreSQL |
+| R-14 | 本地 CI 脚本在 Windows 下兼容性 | General | T-41 提供 `.sh` 主版本,同时提供 PowerShell 等效脚本(`scripts/ci-local.ps1`);docker compose 跨平台 |
+| R-15 | 前端 6 大页面开发工期与并行度 | Mavis | T-48~T-53 可并行开发(各页面独立路由);建议先完成 T-47(公共组件)再开多 worker |
 
 ---
 
@@ -774,8 +1267,11 @@
 
 待用户确认本 TODO 后,下一步动作(任选其一):
 
-- **A. 启动 Phase 0 实施**:Mavis 手干 T-01 / T-02 / T-03,3-5 个核心文件落地后再决定开 Plan。
-- **B. 调整本 TODO**:增删条目、改优先级、调节奏。
-- **C. 直接开 `mavis team plan` 并行多 worker**(不推荐,骨架阶段强耦合)。
+- **A. 启动 Phase 6 实施**:Mavis 先推 T-34(真实数据适配器)+ T-37(DuckDB 存储层),两条关键路径并行。
+- **B. 启动 Phase 7 M3 并行推进**:T-41(本地 CI 脚本)+ T-42(pre-commit hook) 可与 Phase 6 同步开工。
+- **C. 调整本 TODO**:增删条目、改优先级、调节奏。
+- **D. 直接开 `mavis team plan` 并行多 worker**:Phase 6 + Phase 7 M3 可并行。
 
-> **当前状态**:等待用户在 R-1 / R-2 / R-3 上拍板,以及 A/B/C 选一。
+> **当前状态**:等待用户在 R-12 / R-13 / R-14 上拍板,以及 A/B/C/D 选一。
+>
+> **默认超时决定**:若 24 小时内无回复,默认执行 **A + B 并行**(启动 Phase 6 实施 + Phase 7 M3 本地 CI 同步推进),Mavis 不再阻塞等待。

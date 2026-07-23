@@ -1,8 +1,6 @@
 """PIT Panel & Slice API endpoints (TODO T-10 / T-14).
 
 Endpoints:
-- GET  /v1/panels                  (list all manifests — used by PanelSwitcher)
-- POST /v1/panels/build            (create a new manifest)
 - GET  /v1/panels/latest
 - GET  /v1/panels/{panel_id}
 - POST /v1/panels/{panel_id}/slice
@@ -16,11 +14,10 @@ Endpoints:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
-import os
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -160,121 +157,45 @@ class SliceRequest(BaseModel):
 # =============================================================================
 
 
-# Panel manifest discovery accepts two on-disk layouts:
-#   1) flat:        {panels_dir}/{panel_id}_manifest.json        (CLI writes this)
-#   2) nested:      {panels_dir}/{panel_id}/panel_manifest.json   (legacy/manual)
-# Both paths resolve to the same JSON; we pick by mtime (newest wins).
-
-
-def _find_panel_manifest(panel_id: str | None = None) -> list[Path]:
-    """Return manifests matching panel_id (or all), newest first.
-
-    If panel_id is None, return all manifests (used by /panels/latest).
-    """
-    if _PANELS_DIR is None or not _PANELS_DIR.exists():
-        return []
-    if panel_id is None:
-        candidates = list(_PANELS_DIR.rglob("*manifest.json"))
-    else:
-        # Match both flat `{id}_manifest.json` and nested `{id}/panel_manifest.json`.
-        candidates = list(_PANELS_DIR.rglob(f"{panel_id}*manifest.json"))
-        # Also try the nested layout explicitly in case rglob above missed it.
-        candidates += list(_PANELS_DIR.rglob(f"{panel_id}/panel_manifest.json"))
-    # Deduplicate by resolved path.
-    seen: set[Path] = set()
-    unique: list[Path] = []
-    for c in candidates:
-        rp = c.resolve()
-        if rp not in seen:
-            seen.add(rp)
-            unique.append(c)
-    unique.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return unique
-
-
-@router.get("/panels")
-def list_panels() -> dict:
-    """List all panel manifests (newest first).
-
-    Used by the frontend PanelSwitcher to populate its dropdown. Skips files
-    that fail to parse so a single bad manifest doesn't break the listing.
-    """
-    if _PANELS_DIR is None or not _PANELS_DIR.exists():
-        return {"panels": [], "count": 0}
-    manifests = _find_panel_manifest()
-    out = []
-    for path in manifests:
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            # Attach filesystem metadata so the UI can show file mtime/size.
-            stat = path.stat()
-            data["_path"] = str(path.relative_to(_PANELS_DIR))
-            data["_mtime_utc"] = datetime.fromtimestamp(stat.st_mtime, tz=UTC).isoformat()
-            data["_size_bytes"] = stat.st_size
-            out.append(data)
-        except Exception:  # noqa: BLE001 — surface count but skip the bad one
-            continue
-    return {"panels": out, "count": len(out)}
-
-
-@router.get("/panels/latest")
+@router.get(
+    "/panels/latest",
+    summary="Get latest panel",
+    description="Return the most recently built PIT panel manifest.",
+    tags=["panels"],
+    responses={404: {"description": "No panels built yet"}},
+)
 def get_latest_panel() -> dict:
-    manifests = _find_panel_manifest()
+    if _PANELS_DIR is None or not _PANELS_DIR.exists():
+        raise HTTPException(status_code=404, detail="No panels built yet")
+    manifests = sorted(_PANELS_DIR.rglob("panel_manifest.json"), reverse=True)
     if not manifests:
         raise HTTPException(status_code=404, detail="No panels built yet")
     return json.loads(manifests[0].read_text(encoding="utf-8"))
 
 
-@router.get("/panels/{panel_id}")
+@router.get(
+    "/panels/{panel_id}",
+    summary="Get panel by ID",
+    description="Retrieve a specific PIT panel manifest by its panel_id.",
+    tags=["panels"],
+    responses={404: {"description": "Panel not found"}, 503: {"description": "Panels dir not configured"}},
+)
 def get_panel(panel_id: str) -> dict:
     if _PANELS_DIR is None:
         raise HTTPException(status_code=503, detail="Panels dir not configured")
-    matches = _find_panel_manifest(panel_id)
+    matches = list(_PANELS_DIR.rglob(f"{panel_id}/panel_manifest.json"))
     if not matches:
         raise HTTPException(status_code=404, detail=f"Panel not found: {panel_id}")
     return json.loads(matches[0].read_text(encoding="utf-8"))
 
 
-class BuildPanelRequest(BaseModel):
-    decision_time: str
-    universe: list[str] = Field(min_length=1, max_length=50)
-    decision_clock: str = "1805_ET"
-
-    @field_validator("decision_clock")
-    @classmethod
-    def _validate_clock(cls, v: str) -> str:
-        if v not in {"1605_ET", "1805_ET"}:
-            raise ValueError("decision_clock must be 1605_ET or 1805_ET")
-        return v
-
-
-@router.post("/panels/build", status_code=201)
-def build_panel(req: BuildPanelRequest) -> dict:
-    """Build a PIT panel manifest from a decision time + universe.
-
-    Thin wrapper around pit_market.cli.build_panel_manifest so the HTTP path
-    and CLI share validation/registry semantics.
-    """
-    from pit_market.cli import build_panel_manifest, PanelBuildError
-
-    config_dir = Path(os.environ.get("PIT_MARKET_CONFIG", "./config"))
-    data_dir = Path(os.environ.get("PIT_MARKET_DATA", "./data"))
-    try:
-        manifest = build_panel_manifest(
-            decision_time=req.decision_time,
-            universe=req.universe,
-            decision_clock=req.decision_clock,
-            config_dir=config_dir,
-            data_dir=data_dir,
-        )
-    except PanelBuildError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    # Strip the internal _path key; caller doesn't need it.
-    manifest.pop("_path", None)
-    return manifest
-
-
-@router.post("/panels/{panel_id}/slice")
+@router.post(
+    "/panels/{panel_id}/slice",
+    summary="Slice panel data",
+    description="Apply filters, sorting, and pagination to a PIT panel. Returns filtered rows.",
+    tags=["panels"],
+    responses={400: {"description": "Registry validation failed"}, 404: {"description": "Panel not found"}},
+)
 def slice_panel(panel_id: str, req: SliceRequest) -> dict:
     if _PANELS_DIR is None:
         raise HTTPException(status_code=503, detail="Panels dir not configured")
@@ -282,10 +203,7 @@ def slice_panel(panel_id: str, req: SliceRequest) -> dict:
         req.validate_against_registry()
     except RegistryError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
-    panel_path = next(_PANELS_DIR.rglob(f"{panel_id}*value_panel.parquet"), None)
-    if panel_path is None:
-        # Fall back to looking under a {panel_id}/ subdirectory (legacy layout).
-        panel_path = next(_PANELS_DIR.rglob(f"{panel_id}/value_panel.parquet"), None)
+    panel_path = next(_PANELS_DIR.rglob(f"{panel_id}/value_panel.parquet"), None)
     if panel_path is None:
         raise HTTPException(status_code=404, detail=f"Panel not found: {panel_id}")
     df = pl.read_parquet(str(panel_path))
@@ -320,7 +238,13 @@ def slice_panel(panel_id: str, req: SliceRequest) -> dict:
     }
 
 
-@router.post("/panels/replay")
+@router.post(
+    "/panels/replay",
+    summary="Replay PIT panel",
+    description="Replay an existing panel build (idempotent re-run). Not yet implemented.",
+    tags=["panels"],
+    responses={501: {"description": "Not yet implemented"}},
+)
 def replay_panel(req: SliceRequest) -> dict:
     raise HTTPException(status_code=501, detail="PIT replay not yet implemented; see T-14 follow-up")
 
@@ -330,7 +254,13 @@ def replay_panel(req: SliceRequest) -> dict:
 # =============================================================================
 
 
-@router.get("/metrics/registry")
+@router.get(
+    "/metrics/registry",
+    summary="Metric registry",
+    description="List all registered metric fields with their metadata.",
+    tags=["registry"],
+    responses={503: {"description": "Registry not configured"}},
+)
 def metrics_registry() -> dict:
     if _REGISTRY is None:
         raise HTTPException(status_code=503, detail="Registry not configured")
@@ -354,7 +284,13 @@ def metrics_registry() -> dict:
     }
 
 
-@router.get("/instruments/registry")
+@router.get(
+    "/instruments/registry",
+    summary="Instrument registry",
+    description="List all registered instruments with their metadata.",
+    tags=["registry"],
+    responses={503: {"description": "Registry not configured"}},
+)
 def instruments_registry() -> dict:
     if _REGISTRY is None:
         raise HTTPException(status_code=503, detail="Registry not configured")
@@ -383,7 +319,12 @@ def instruments_registry() -> dict:
 # =============================================================================
 
 
-@router.post("/runs/{run_id}/start")
+@router.post(
+    "/runs/{run_id}/start",
+    summary="Start SSE run",
+    description="Initialize an SSE progress stream for a PIT panel build or ETL run.",
+    tags=["sse"],
+)
 def start_run(run_id: str) -> dict:
     _RUN_PROGRESS[run_id] = [{
         "event": "run_status",
@@ -398,7 +339,12 @@ def start_run(run_id: str) -> dict:
     return {"run_id": run_id, "status": "QUEUED"}
 
 
-@router.post("/runs/{run_id}/progress")
+@router.post(
+    "/runs/{run_id}/progress",
+    summary="Push progress event",
+    description="Push a progress event to the SSE stream for a running job.",
+    tags=["sse"],
+)
 def push_progress(run_id: str, status: str, progress_pct: int, message_zh: str = "") -> dict:
     if run_id not in _RUN_PROGRESS:
         _RUN_PROGRESS[run_id] = []
@@ -416,7 +362,12 @@ def push_progress(run_id: str, status: str, progress_pct: int, message_zh: str =
     return {"run_id": run_id, "status": status, "event_count": len(events)}
 
 
-@router.get("/runs/{run_id}/stream")
+@router.get(
+    "/runs/{run_id}/stream",
+    summary="SSE progress stream",
+    description="Server-Sent Events stream with Last-Event-ID resume support.",
+    tags=["sse"],
+)
 async def stream_run(
     run_id: str,
     request: Request,
@@ -449,3 +400,125 @@ async def stream_run(
             yield b": keepalive\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
+
+
+# =============================================================================
+# T-38: DuckDB SQL endpoint + Registry search + Panel store integration
+# =============================================================================
+
+
+class SQLRequest(BaseModel):
+    sql: str = Field(..., description="Read-only SQL query")
+
+
+class ErrorDetail(BaseModel):
+    error_code: str
+    message: str
+    details: dict = Field(default_factory=dict)
+
+
+@router.post(
+    "/sql",
+    summary="Execute read-only DuckDB SQL (dev mode only)",
+    description="Execute a read-only SQL query against DuckDB. Disabled in production.",
+    tags=["admin"],
+    response_model=dict,
+    responses={
+        403: {"description": "Disabled in production mode", "model": ErrorDetail},
+        400: {"description": "Invalid SQL", "model": ErrorDetail},
+        408: {"description": "Query timeout (>30s)", "model": ErrorDetail},
+    },
+)
+def execute_sql(req: SQLRequest) -> dict:
+    """Execute read-only DuckDB SQL (discipline #9: dev mode only)."""
+    import os
+    env = os.environ.get("ENV", "development").lower()
+    if env != "development":
+        raise HTTPException(
+            status_code=403,
+            detail={"error_code": "SQL_DISABLED", "message": "/sql endpoint disabled in production mode"},
+        )
+
+    # Basic safety: reject write statements
+    sql_upper = req.sql.strip().upper()
+    write_keywords = ("INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE")
+    for kw in write_keywords:
+        if sql_upper.startswith(kw):
+            raise HTTPException(
+                status_code=400,
+                detail={"error_code": "WRITE_FORBIDDEN", "message": f"Write operations not allowed: {kw}"},
+            )
+
+    try:
+        from pit_market.storage import duckdb_engine
+        # Timeout: 30s (implemented via DuckDB statement_timeout)
+        conn = duckdb_engine.get_connection()
+        conn.execute("SET statement_timeout = '30s'")
+        result = conn.execute(req.sql)
+        columns = [desc[0] for desc in result.description]
+        rows = result.fetchmany(10000)
+        truncated = False
+        if result.fetchone() is not None:
+            truncated = True
+        return {
+            "columns": columns,
+            "rows": [dict(zip(columns, row, strict=False)) for row in rows],
+            "row_count": len(rows),
+            "truncated": truncated,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail={"error_code": "SQL_ERROR", "message": str(e)}) from e
+
+
+@router.get(
+    "/registry/search",
+    summary="Search instrument registry",
+    description="Fuzzy search across canonical symbols and display names.",
+    tags=["registry"],
+    response_model=dict,
+    responses={
+        200: {"description": "Search results"},
+    },
+)
+def search_registry(q: str = "") -> dict:
+    """Symbol fuzzy search in instrument registry (T-38, for T-51 frontend)."""
+    if _REGISTRY is None:
+        raise HTTPException(status_code=503, detail="Registry not configured")
+    query = q.lower().strip()
+    results = []
+    for sym, inst in _REGISTRY.instruments.items():
+        searchable = f"{sym} {inst.display_name_en} {inst.display_name_zh} {inst.asset_class or ''}".lower()
+        if not query or query in searchable:
+            results.append({
+                "symbol": sym,
+                "asset_class": inst.asset_class,
+                "display_name_en": inst.display_name_en,
+                "display_name_zh": inst.display_name_zh,
+                "vendor_symbol_yfinance": inst.vendor_symbol_yfinance,
+            })
+    return {"query": q, "count": len(results), "results": results}
+
+
+@router.get(
+    "/panels",
+    summary="List all panels",
+    description="List all panels from DuckDB storage (T-38 integration).",
+    tags=["panels"],
+    response_model=dict,
+)
+def list_all_panels() -> dict:
+    """List all panels from DuckDB panel store."""
+    try:
+        from pit_market.storage.panel_store import list_panels
+        panels = list_panels()
+        return {"panels": panels, "count": len(panels)}
+    except Exception:
+        # Fallback: scan filesystem
+        if _PANELS_DIR is None or not _PANELS_DIR.exists():
+            return {"panels": [], "count": 0}
+        manifests = list(_PANELS_DIR.rglob("manifest.json")) + list(_PANELS_DIR.rglob("*_manifest.json"))
+        panels = []
+        for m in manifests:
+            with contextlib.suppress(Exception):
+                panels.append(json.loads(m.read_text(encoding="utf-8")))
+        return {"panels": panels, "count": len(panels)}

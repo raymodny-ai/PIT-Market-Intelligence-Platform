@@ -37,9 +37,13 @@ app = typer.Typer(
 pit_app = typer.Typer(help="PIT panel commands (build / replay).")
 report_app = typer.Typer(help="Report commands (build).")
 backtest_app = typer.Typer(help="Walk-forward backtest (T-30).")
+sync_app = typer.Typer(help="Data sync commands (T-36).")
+docs_app = typer.Typer(help="API documentation commands (T-45).")
 app.add_typer(pit_app, name="pit")
 app.add_typer(report_app, name="report")
 app.add_typer(backtest_app, name="backtest")
+app.add_typer(sync_app, name="sync")
+app.add_typer(docs_app, name="docs")
 
 
 # ---------- shared helpers ----------
@@ -170,78 +174,6 @@ def refresh(
 
 # ---------- pit build / replay ----------
 
-class PanelBuildError(ValueError):
-    """Raised when a panel build request is invalid (bad symbols, bad ts, etc.).
-
-    Used by both the CLI and the HTTP API so they share validation semantics.
-    """
-
-
-def build_panel_manifest(
-    decision_time: str,
-    universe: list[str] | str,
-    decision_clock: str = "1805_ET",
-    *,
-    config_dir: Path | None = None,
-    data_dir: Path | None = None,
-    output: Path | None = None,
-) -> dict:
-    """Build a PIT panel manifest and write it to disk. Returns the manifest dict.
-
-    Args:
-        decision_time: ISO-8601 timestamp (trailing Z accepted).
-        universe: Comma-separated string or list of canonical_symbols.
-        decision_clock: '1605_ET' or '1805_ET'.
-        config_dir: Override PIT config dir (default from PIT_MARKET_CONFIG).
-        data_dir: Override data dir (default from PIT_MARKET_DATA).
-        output: Override output JSON path (default: {data_dir}/gold/pit_panels/{id}_manifest.json).
-
-    Raises:
-        PanelBuildError: if the timestamp or symbols are invalid, or the
-            registry can't be loaded.
-    """
-    if config_dir is None:
-        config_dir = _default_config_dir()
-    if data_dir is None:
-        data_dir = _default_data_dir()
-    try:
-        reg = _load_registry(config_dir)
-    except typer.Exit:  # raised by _load_registry on RegistryError
-        raise PanelBuildError(f"failed to load registry from {config_dir}")
-    try:
-        dt = _ts(decision_time).astimezone(UTC)
-    except (ValueError, TypeError) as e:
-        raise PanelBuildError(f"invalid decision_time: {decision_time!r} ({e})") from e
-    if isinstance(universe, str):
-        symbols = [s.strip() for s in universe.split(",") if s.strip()]
-    else:
-        symbols = [s.strip() for s in universe if s and s.strip()]
-    if not symbols:
-        raise PanelBuildError("universe must contain at least one symbol")
-    unknown = [s for s in symbols if not reg.has_instrument(s)]
-    if unknown:
-        raise PanelBuildError(f"unknown canonical_symbol(s): {unknown}")
-    if decision_clock not in {"1605_ET", "1805_ET"}:
-        raise PanelBuildError(f"decision_clock must be 1605_ET or 1805_ET, got {decision_clock!r}")
-    panels_dir = data_dir / "gold" / "pit_panels"
-    panels_dir.mkdir(parents=True, exist_ok=True)
-    panel_id = f"cli-{dt.strftime('%Y%m%dT%H%M%SZ')}-{'-'.join(symbols)}"
-    manifest = {
-        "panel_id": panel_id,
-        "decision_time_utc": dt.isoformat(),
-        "decision_clock": decision_clock,
-        "universe": symbols,
-        "registry_hash": reg.registry_hash,
-        "feature_version": "features.v1.0",
-        "metric_registry_version": "metrics.v1.0",
-        "instrument_registry_version": "registry.v1.0",
-    }
-    out = output or (panels_dir / f"{panel_id}_manifest.json")
-    out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
-    manifest["_path"] = str(out)
-    return manifest
-
-
 @pit_app.command("build")
 def pit_build(
     decision_time: str = typer.Option(..., "--decision-time", "-t", help="ISO-8601 timestamp."),
@@ -249,26 +181,65 @@ def pit_build(
         "SPY,QQQ,GLD,SLV", "--universe", "-u", help="Comma-separated canonical_symbols."
     ),
     decision_clock: str = typer.Option("1805_ET", "--clock", help="1605_ET or 1805_ET."),
+    panel_name: str = typer.Option("gold", "--panel", help="Panel name (e.g. gold, equity)."),
+    source: str = typer.Option("manifest", "--source", help="Data source: manifest|yahoo|polygon|auto."),
     config_dir: Path = typer.Option(_default_config_dir, "--config", "-c"),
     data_dir: Path = typer.Option(_default_data_dir, "--data", "-d"),
     output: Path | None = typer.Option(
         None, "--output", "-o", help="Override output JSON path."
     ),
 ) -> None:
-    """Build a PIT panel for the given decision_time."""
-    try:
-        manifest = build_panel_manifest(
-            decision_time=decision_time,
-            universe=universe,
-            decision_clock=decision_clock,
-            config_dir=config_dir,
-            data_dir=data_dir,
-            output=output,
+    """Build a PIT panel for the given decision_time.
+
+    --source manifest: v1.1 manifest-only flow (backward compatible)
+    --source yahoo|polygon|auto: v2.0 real data pipeline (T-35)
+    """
+    reg = _load_registry(config_dir)
+    dt = _ts(decision_time).astimezone(UTC)
+    symbols = [s.strip() for s in universe.split(",")]
+    unknown = [s for s in symbols if not reg.has_instrument(s)]
+    if unknown:
+        err_console.print(f"[red]unknown canonical_symbol(s):[/red] {unknown}")
+        raise typer.Exit(code=2)
+    panels_dir = data_dir / "gold" / "pit_panels"
+    panels_dir.mkdir(parents=True, exist_ok=True)
+
+    if source == "manifest":
+        # v1.1 manifest-only flow (backward compatible)
+        panel_id = f"cli-{dt.strftime('%Y%m%dT%H%M%SZ')}-{'-'.join(symbols)}"
+        manifest = {
+            "panel_id": panel_id,
+            "panel_type": "manifest",
+            "decision_time_utc": dt.isoformat(),
+            "decision_clock": decision_clock,
+            "universe": symbols,
+            "registry_hash": reg.registry_hash,
+            "feature_version": "features.v1.0",
+            "metric_registry_version": "metrics.v1.0",
+            "instrument_registry_version": "registry.v1.0",
+        }
+        out = output or (panels_dir / f"{panel_id}_manifest.json")
+        out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+        console.print(f"[bold green]\u2713[/bold green] panel manifest written: {out}")
+    else:
+        # v2.0 real data pipeline (T-35)
+        import datetime as _dt_mod
+
+        from pit_market.pit.real_builder import RealPanelBuilder
+        builder = RealPanelBuilder(output_dir=panels_dir)
+        start_date = (dt - _dt_mod.timedelta(days=365 * 5)).date()
+        end_date = dt.date()
+        result = builder.build(
+            panel_name=panel_name,
+            symbols=symbols,
+            start=start_date,
+            end=end_date,
+            source=source,
         )
-    except PanelBuildError as e:
-        err_console.print(f"[red]{e}[/red]")
-        raise typer.Exit(code=2) from e
-    console.print(f"[bold green]✓[/bold green] panel manifest written: {manifest['_path']}")
+        console.print(
+            f"[bold green]\u2713[/bold green] real panel built: {result.panel_id} "
+            f"({result.row_count} rows, source={result.data_source})"
+        )
 
 
 @pit_app.command("replay")
@@ -507,6 +478,215 @@ def backtest_run(
         f"[bold green]✓[/bold green] folds={summary['folds']} "
         f"ic_mean={summary.get('ic_mean', 0):.4f} → {summary_path}"
     )
+
+
+# ---------- sync (T-36) ----------
+
+@sync_app.command("run")
+def sync_run(
+    symbol: str = typer.Option(..., "--symbol", help="Canonical symbol to sync."),
+    since: str = typer.Option(..., "--since", help="Start date (YYYY-MM-DD)."),
+    source: str = typer.Option("yahoo", "--source", help="Data source: yahoo|polygon."),
+    freq: str = typer.Option("1d", "--freq", help="Frequency: 1d|1h|1m."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print range, don't write."),
+    data_dir: Path = typer.Option(_default_data_dir, "--data", "-d"),
+) -> None:
+    """Incremental data sync (T-36).
+
+    Records last_fetched_at in DuckDB data_registry table.
+    Idempotent: re-running does not duplicate data.
+    """
+    from datetime import datetime as _dt
+
+    import structlog
+    slogger = structlog.get_logger("pit_market.sync")
+    job_id = f"sync-{symbol}-{_dt.now(UTC).strftime('%Y%m%d%H%M%S')}"
+
+    # Check last_fetched_at from registry
+    last_fetched = None
+    try:
+        from pit_market.storage.panel_store import get_data_registry, upsert_data_registry
+        entry = get_data_registry(symbol, source=source, freq=freq)
+        if entry and entry.get("last_fetched_at"):
+            last_fetched = entry["last_fetched_at"]
+    except Exception:
+        pass
+
+    start_date = _dt.fromisoformat(since).date()
+    end_date = _dt.now(UTC).date()
+
+    if dry_run:
+        console.print(
+            f"[blue]dry-run[/blue] sync {symbol}: "
+            f"since={start_date} to={end_date} "
+            f"(last_fetched={last_fetched or 'never'})"
+        )
+        return
+
+    t0 = __import__("time").monotonic()
+    if source == "yahoo":
+        from pit_market.ingestion.adapters.yahoo_real_adapter import YahooRealAdapter
+        adapter = YahooRealAdapter()
+    elif source == "polygon":
+        from pit_market.ingestion.adapters.polygon_adapter import PolygonAdapter
+        adapter = PolygonAdapter()
+    else:
+        err_console.print(f"[red]unknown source:[/red] {source}")
+        raise typer.Exit(code=2)
+
+    result = adapter.fetch(symbol, start_date, end_date, freq)
+    duration_ms = int((__import__("time").monotonic() - t0) * 1000)
+
+    slogger.info(
+        "sync_complete",
+        job_id=job_id,
+        symbol=symbol,
+        duration_ms=duration_ms,
+        rows=result.row_count,
+        source=source,
+        status=result.quality_status,
+    )
+
+    # Update data_registry
+    try:
+        upsert_data_registry(
+            symbol=symbol, source=source, freq=freq,
+            last_fetched_at=_dt.now(UTC), row_count=result.row_count,
+            quality_flags=result.quality_flags,
+        )
+    except Exception as e:
+        slogger.warning("Failed to update data_registry: %s", e)
+
+    # Write parquet
+    if not result.df.is_empty():
+        out_dir = data_dir / "silver" / "real_data" / source / symbol
+        out_dir.mkdir(parents=True, exist_ok=True)
+        parquet_path = out_dir / f"{start_date}_{end_date}.parquet"
+        result.df.write_parquet(str(parquet_path))
+        console.print(
+            f"[bold green]\u2713[/bold green] synced {symbol}: "
+            f"{result.row_count} rows → {parquet_path}"
+        )
+    else:
+        console.print(f"[yellow]no data[/yellow] for {symbol}")
+
+# ---------- entry point ----------
+
+
+# ---------- docs (T-45) ----------
+
+@docs_app.command("serve")
+def docs_serve(
+    port: int = typer.Option(8080, "--port", "-p", help="Port to serve docs."),
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind address."),
+    api_url: str = typer.Option(
+        "http://127.0.0.1:8000", "--api-url", help="PIT Market API base URL for OpenAPI schema."
+    ),
+) -> None:
+    """Serve the API documentation site locally (Redoc)."""
+    import http.server
+    import socketserver
+    import tempfile
+    import textwrap
+
+    # Generate a Redoc HTML page that loads OpenAPI schema from the running API
+    html = textwrap.dedent(f"""\
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>PIT Market Intelligence — API Documentation</title>
+      <meta charset="utf-8"/>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <link href="https://fonts.googleapis.com/css?family=Inter:300,400,500,600,700" rel="stylesheet">
+      <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+      <style>
+        body {{ margin: 0; padding: 0; }}
+      </style>
+    </head>
+    <body>
+      <div id="redoc-container"></div>
+      <script>
+        Redoc.init('{api_url}/openapi.json', {{
+          theme: {{
+            colors: {{ primary: {{ main: '#4f46e5' }} }},
+            typography: {{ fontFamily: '"Inter", sans-serif' }},
+          }},
+          hideDownloadButton: false,
+          expandResponses: '200',
+        }}, document.getElementById('redoc-container'));
+      </script>
+    </body>
+    </html>
+    """)
+
+    # Write to a temp dir and serve
+    docs_dir = Path(tempfile.mkdtemp(prefix="pit-docs-"))
+    index_path = docs_dir / "index.html"
+    index_path.write_text(html, encoding="utf-8")
+
+    console.print(
+        f"[bold green]\u2713[/bold green] serving API docs at "
+        f"http://{host}:{port} (loading schema from {api_url}/openapi.json)"
+    )
+    console.print("[dim]Press Ctrl+C to stop[/dim]")
+
+    handler = http.server.SimpleHTTPRequestHandler
+    handler.directory = str(docs_dir)  # type: ignore[attr-defined]
+
+    class QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=str(docs_dir), **kwargs)
+
+        def log_message(self, format, *args):
+            pass  # suppress request logs
+
+    with socketserver.TCPServer((host, port), QuietHandler) as httpd:
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            console.print("\n[yellow]stopped[/yellow]")
+
+
+@docs_app.command("build")
+def docs_build(
+    api_url: str = typer.Option(
+        "http://127.0.0.1:8000", "--api-url", help="PIT Market API base URL."
+    ),
+    output: Path = typer.Option(
+        Path("./docs/api"), "--output", "-o", help="Output directory."
+    ),
+) -> None:
+    """Generate static API documentation HTML."""
+    import textwrap
+
+    output.mkdir(parents=True, exist_ok=True)
+    html = textwrap.dedent(f"""\
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>PIT Market Intelligence — API Documentation</title>
+      <meta charset="utf-8"/>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <link href="https://fonts.googleapis.com/css?family=Inter:300,400,500,600,700" rel="stylesheet">
+      <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+      <style>body {{ margin: 0; padding: 0; }}</style>
+    </head>
+    <body>
+      <div id="redoc-container"></div>
+      <script>
+        Redoc.init('{api_url}/openapi.json', {{
+          theme: {{
+            colors: {{ primary: {{ main: '#4f46e5' }} }},
+            typography: {{ fontFamily: '"Inter", sans-serif' }},
+          }},
+        }}, document.getElementById('redoc-container'));
+      </script>
+    </body>
+    </html>
+    """)
+    index_path = output / "index.html"
+    index_path.write_text(html, encoding="utf-8")
+    console.print(f"[bold green]\u2713[/bold green] static docs written to {index_path}")
 
 
 # ---------- entry point ----------

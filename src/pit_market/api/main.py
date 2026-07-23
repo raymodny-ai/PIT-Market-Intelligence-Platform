@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from pit_market import __version__
 from pit_market.api import analyses as analyses_api
 from pit_market.api import export as export_api
+from pit_market.api import extended as extended_api
 from pit_market.api import lineage as lineage_api
 from pit_market.api import panels as panels_api
 from pit_market.storage.cache import InProcessCache
@@ -64,6 +65,7 @@ app.include_router(panels_api.router)
 app.include_router(export_api.export_router)
 app.include_router(analyses_api.router)
 app.include_router(lineage_api.router)
+app.include_router(extended_api.router)
 
 
 # -----------------------------------------------------------------------------
