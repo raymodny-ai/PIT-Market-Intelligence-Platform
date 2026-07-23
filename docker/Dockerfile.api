@@ -26,10 +26,13 @@ RUN apt-get update \
 
 WORKDIR /opt/pit/app
 
-# Layer cache: copy only the manifests first so that dep changes invalidate
-# only the uv sync layer. uv's own cache lives in /root/.cache/uv.
+# Layer cache: copy manifests + package source together so that `uv sync`
+# can resolve the project metadata (pyproject.toml + src/pit_market) in one
+# shot. setuptools 77+ validates egg_base at install time and errors if
+# src/ is missing — so src MUST be present before uv sync.
 # (No uv.lock yet — uv generates one on first sync.)
 COPY pyproject.toml ./
+COPY src ./src
 
 # Install runtime + the optional groups the API actually uses.
 # We deliberately exclude 'dev' (test deps) to keep the image lean.
@@ -37,8 +40,8 @@ COPY pyproject.toml ./
 RUN uv sync --no-dev --extra etl --extra llm \
     && uv cache prune --ci
 
-# Now copy the application source.
-COPY src ./src
+# Config is small and read-only at runtime — copy after sync to keep the
+# install layer cacheable when config files change (rare).
 COPY config ./config
 
 ENV PATH="/opt/pit/app/.venv/bin:$PATH" \

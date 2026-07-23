@@ -26,6 +26,12 @@ services:
     command: ["uvicorn", "pit_market.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment:
       <<: *pit-env
+    # .env.docker is OPTIONAL — only needed for DeepSeek / OpenAI LLM calls.
+    # Create it with `make env-docker` or by running scripts/setup-env-docker.sh.
+    # Missing file is fine (analyze will fall back to mock provider).
+    env_file:
+      - path: .env.docker
+        required: false
     ports:
       - "8700:8000"
     volumes:

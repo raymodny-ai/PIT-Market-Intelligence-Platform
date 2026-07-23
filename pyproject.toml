@@ -62,6 +62,8 @@ dev = [
 etl = [
     "yfinance>=0.2.40",
     "rapidfuzz>=3.9",  # for fuzzy symbol matching in adapters
+    "jsonschema>=4.20",  # config + manifest validation (registry.py)
+    "nbformat>=5.9",  # notebook lineage metadata (notebook_processor)
 ]
 llm = [
     "openai>=1.30",
