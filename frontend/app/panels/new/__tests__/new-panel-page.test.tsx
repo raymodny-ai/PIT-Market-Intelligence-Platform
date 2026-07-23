@@ -24,6 +24,12 @@ vi.mock("next/navigation", () => ({
 // Stub fetch — the page calls fetchPanelsList, fetchInstruments, buildPanel.
 // Handlers are checked in insertion order; the most specific match should
 // come first (e.g. /v1/panels/build must precede /v1/panels).
+//
+// The page uses two different fetch helpers in lib/api.ts:
+//   - getJson()     -> r.json()          (fetchInstruments, fetchPanelsList)
+//   - postJsonWithError() -> r.text()    (buildPanel)
+//
+// So the mock needs to provide BOTH `text` and `json` (they must agree).
 const originalFetch = global.fetch;
 function mockFetch(handlers: Array<[string, () => unknown]>) {
   global.fetch = vi.fn((input: any) => {
@@ -31,9 +37,11 @@ function mockFetch(handlers: Array<[string, () => unknown]>) {
     for (const [match, build] of handlers) {
       if (url.includes(match)) {
         const body = build();
+        const text = JSON.stringify(body);
         return Promise.resolve({
           ok: true,
           status: 200,
+          text: () => Promise.resolve(text),
           json: () => Promise.resolve(body),
         });
       }
@@ -166,28 +174,36 @@ describe("/panels/new (build panel form)", () => {
     expect(body.decision_time).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
   });
 
-  it("shows an error message when the server returns a non-OK build response", async () => {
+  it("shows an error message with status code when the build endpoint 500s", async () => {
     (global.fetch as any) = vi.fn((input: any) => {
       const url = String(input);
       if (url.includes("/v1/panels/build")) {
+        // Server returns a 500 with a JSON detail body (FastAPI style).
+        const body = { detail: "Disk quota exceeded in /vol1" };
+        const text = JSON.stringify(body);
         return Promise.resolve({
           ok: false,
           status: 500,
           statusText: "Internal Server Error",
-          json: () => Promise.reject(new Error("not json")),
+          text: () => Promise.resolve(text),
+          json: () => Promise.resolve(body),
         });
       }
       if (url.includes("/v1/instruments/registry")) {
+        const text = JSON.stringify(INSTRUMENTS_PAYLOAD);
         return Promise.resolve({
           ok: true,
           status: 200,
+          text: () => Promise.resolve(text),
           json: () => Promise.resolve(INSTRUMENTS_PAYLOAD),
         });
       }
       if (url.includes("/v1/panels")) {
+        const text = JSON.stringify(PANELS_LIST_RESPONSE);
         return Promise.resolve({
           ok: true,
           status: 200,
+          text: () => Promise.resolve(text),
           json: () => Promise.resolve(PANELS_LIST_RESPONSE),
         });
       }
@@ -204,9 +220,12 @@ describe("/panels/new (build panel form)", () => {
     await user.click(screen.getByRole("button", { name: /构建 panel/ }));
 
     await waitFor(() => {
-      // postJson() returns null on !ok, so the page surfaces
-      // "后端无响应 — 检查 FastAPI 是否在运行".
-      expect(screen.getByText(/后端无响应/)).toBeInTheDocument();
+      // The page now shows the server's actual error message:
+      // "[500] Disk quota exceeded in /vol1" — in a single red-bordered
+      // div with class containing "bg-red-50".
+      const errorDiv = document.querySelector(".bg-red-50");
+      expect(errorDiv?.textContent).toMatch(/500/);
+      expect(errorDiv?.textContent).toMatch(/Disk quota/);
     });
 
     expect(mockPush).not.toHaveBeenCalled();

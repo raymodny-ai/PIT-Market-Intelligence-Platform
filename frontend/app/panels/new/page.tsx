@@ -117,14 +117,14 @@ export default function NewPanelPage() {
         universe,
         decision_clock: clock,
       });
-      if (!r) throw new Error("后端无响应 — 检查 FastAPI 是否在运行");
-      // Pydantic returns 422 with detail array; check for shape.
-      if ((r as any).detail) {
-        const d = (r as any).detail;
-        if (typeof d === "string") throw new Error(d);
-        throw new Error(`参数错误: ${JSON.stringify(d)}`);
+      if (!r.ok) {
+        // Tri-state result: surface the server's actual error message
+        // (Pydantic field name, FastAPI detail string, network error, etc.)
+        // instead of a generic "no response" toast.
+        const prefix = r.status === 0 ? "" : `[${r.status}] `;
+        throw new Error(`${prefix}${r.detail}`);
       }
-      return r as BuildPanelResponse;
+      return r.data;
     },
     onSuccess: async (data) => {
       // Invalidate so PanelSwitcher re-fetches.

@@ -61,6 +61,24 @@ export function formatTimestamp(iso: string | undefined | null, withTz = true): 
   }
 }
 
+// Compact form: "MM-DD HH:MM UTC" — for mobile / narrow viewports where
+// the full "YYYY-MM-DD HH:MM:SS UTC" doesn't fit. Year is dropped (a panel
+// from last year is an edge case, and the user can hover/click for full).
+export function formatTimestampShort(iso: string | undefined | null, withTz = true): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(d.getUTCDate()).padStart(2, "0");
+    const hh = String(d.getUTCHours()).padStart(2, "0");
+    const mi = String(d.getUTCMinutes()).padStart(2, "0");
+    return withTz ? `${mm}-${dd} ${hh}:${mi} UTC` : `${mm}-${dd} ${hh}:${mi}`;
+  } catch {
+    return iso;
+  }
+}
+
 // formatTimestampUtc — always renders in UTC, never local TZ. Use this for
 // SSR-rendered timestamps to avoid React hydration mismatches (server vs
 // browser locale).

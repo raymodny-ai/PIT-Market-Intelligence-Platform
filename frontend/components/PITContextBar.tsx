@@ -10,7 +10,7 @@ import { useSliceStore } from "../stores/sliceStore";
 import { useReportStore } from "../stores/reportStore";
 import { PanelSwitcher } from "./PanelSwitcher";
 import { useMounted } from "../lib/useMounted";
-import { formatTimestamp, dataAgeHuman, qualityPill } from "../lib/formatting";
+import { formatTimestamp, formatTimestampShort, dataAgeHuman, qualityPill } from "../lib/formatting";
 import type { QualityStatus } from "../types/api";
 
 export interface PITContextBarProps {
@@ -65,10 +65,10 @@ export function PITContextBar(props: PITContextBarProps) {
       className="sticky top-0 z-30 w-full bg-white border-b border-ink-200 shadow-sm"
       onMouseLeave={() => setHovered(false)}
     >
-      <div className="flex items-center gap-3 px-4 py-2 text-sm">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-sm sm:px-4">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="label-muted">Panel</span>
-          <span className="font-mono text-ink-900 truncate max-w-[180px]" title={panelId}>
+          <span className="label-muted hidden sm:inline">Panel</span>
+          <span className="font-mono text-ink-900 truncate max-w-[120px] sm:max-w-[180px]" title={panelId}>
             {panelId}
           </span>
         </div>
@@ -83,20 +83,22 @@ export function PITContextBar(props: PITContextBarProps) {
           title="点击打开时间回放"
         >
           <span className="label-muted">decision_time</span>
-          <span className={`font-mono tabular-nums ${hovered ? "text-brand-600" : "text-ink-900"}`}>
-            {formatTimestamp(decisionTime, false)}
+          <span className={`font-mono tabular-nums whitespace-nowrap ${hovered ? "text-brand-600" : "text-ink-900"}`}>
+            {/* Compact format on mobile (drops year + seconds), full on md+ */}
+            <span className="md:hidden">{formatTimestampShort(decisionTime, false)}</span>
+            <span className="hidden md:inline">{formatTimestamp(decisionTime, false)}</span>
           </span>
           <span className="text-ink-500 text-xs">({slice.decisionClock})</span>
         </button>
 
-        <div className="h-4 w-px bg-ink-200" />
+        <div className="h-4 w-px bg-ink-200 hidden md:block" />
 
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="hidden md:flex items-center gap-2 min-w-0">
           <span className="label-muted">panel_version</span>
           <span className="font-mono text-ink-700">{panelVersion}</span>
         </div>
 
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="hidden md:flex items-center gap-2 min-w-0">
           <span className="label-muted">feature_version</span>
           <span className="font-mono text-ink-700">{featureVersion}</span>
         </div>
@@ -142,9 +144,11 @@ export function PITContextBar(props: PITContextBarProps) {
         <button
           type="button"
           onClick={props.onSaveSnapshot}
-          className="btn-ghost ml-1"
+          className="btn-ghost ml-1 whitespace-nowrap"
+          title="另存为快照"
         >
-          <SaveIcon /> 另存为快照
+          <SaveIcon />
+          <span className="hidden sm:inline">另存为快照</span>
         </button>
       </div>
     </div>

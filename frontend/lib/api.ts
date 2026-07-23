@@ -59,6 +59,60 @@ async function postJson<T>(path: string, body: unknown): Promise<T | null> {
   }
 }
 
+// Tri-state result for endpoints where callers need to surface server-side
+// validation errors (4xx with a JSON detail body) rather than treat them
+// as "no response". Most call sites still want postJson()'s T|null.
+export type JsonResult<T> =
+  | { ok: true; data: T; status: number }
+  | { ok: false; status: number; detail: string };
+
+/** POST that exposes the server's error body. Used by buildPanel() so the
+ *  UI can show Pydantic validation messages, not a generic "no response". */
+async function postJsonWithError<T>(path: string, body: unknown): Promise<JsonResult<T>> {
+  let r: Response;
+  try {
+    r = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+  } catch (e) {
+    return { ok: false, status: 0, detail: `网络错误: ${(e as Error).message}` };
+  }
+  // Always try to parse JSON, even on 4xx — FastAPI puts detail in the body.
+  const text = await r.text();
+  let parsed: any = null;
+  if (text) {
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      // non-JSON body; fall through with raw text
+    }
+  }
+  if (r.ok) {
+    return { ok: true, data: parsed as T, status: r.status };
+  }
+  // 4xx / 5xx: surface the FastAPI detail (string OR Pydantic error array).
+  const detail = formatErrorDetail(parsed, text, r.status);
+  return { ok: false, status: r.status, detail };
+}
+
+function formatErrorDetail(parsed: any, rawText: string, status: number): string {
+  if (!parsed) return `HTTP ${status}: ${rawText.slice(0, 200) || "(empty body)"}`;
+  if (typeof parsed.detail === "string") return parsed.detail;
+  if (Array.isArray(parsed.detail)) {
+    // Pydantic validation error array — pull out field+msg.
+    return parsed.detail
+      .map((e: any) => {
+        const loc = Array.isArray(e.loc) ? e.loc.join(".") : "?";
+        return `${loc}: ${e.msg ?? "invalid"}`;
+      })
+      .join("; ");
+  }
+  return `HTTP ${status}: ${JSON.stringify(parsed).slice(0, 200)}`;
+}
+
 function validated<T>(schema: { safeParse: (v: unknown) => { success: true; data: T } | { success: false } }, raw: unknown, fallback: T): T {
   const res = schema.safeParse(raw);
   return res.success ? res.data : fallback;
@@ -76,8 +130,11 @@ export async function fetchHealth(): Promise<{ status: string; version: string; 
 export async function fetchInstruments(): Promise<{ canonical_symbol: string; asset_class: string; display_name_zh?: string; display_name_en?: string }[]> {
   const r = await getJson<{ instruments: Record<string, any> }>("/v1/instruments/registry");
   if (!r) return [];
-  return Object.values(r.instruments ?? {}).map((i: any) => ({
-    canonical_symbol: i.canonical_symbol,
+  // The API responses with instruments keyed by canonical_symbol, but the field
+  // itself is omitted from the inner objects — fall back to the key so callers
+  // always have a non-empty canonical_symbol to render.
+  return Object.entries(r.instruments ?? {}).map(([key, i]: [string, any]) => ({
+    canonical_symbol: i.canonical_symbol ?? key,
     asset_class: i.asset_class,
     display_name_zh: i.display_name_zh,
     display_name_en: i.display_name_en,
@@ -119,12 +176,18 @@ export interface BuildPanelResponse {
   instrument_registry_version: string;
 }
 
-export async function buildPanel(req: BuildPanelRequest): Promise<BuildPanelResponse | null> {
-  const r = await postJson<any>("/v1/panels/build", {
+/** Result of a build-panel attempt. Either ok with the manifest, or
+ *  not-ok with a server-provided error string. Callers should check
+ *  the discriminated union instead of relying on null. */
+export type BuildPanelResult =
+  | { ok: true; status: number; data: BuildPanelResponse }
+  | { ok: false; status: number; detail: string };
+
+export async function buildPanel(req: BuildPanelRequest): Promise<BuildPanelResult> {
+  return postJsonWithError<BuildPanelResponse>("/v1/panels/build", {
     decision_clock: "1805_ET",
     ...req,
   });
-  return r as BuildPanelResponse | null;
 }
 
 export async function fetchPanelLatest(): Promise<PanelSummary | null> {

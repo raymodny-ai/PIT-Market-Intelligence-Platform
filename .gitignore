@@ -71,3 +71,7 @@ secrets/
 
 # --- Phase 0 placeholder folders (regenerated at runtime) ---
 # src/pit_market/__pycache__/
+
+
+# Dev-only — puppeteer-core is used by frontend/scripts/e2e-screenshots.cjs
+# but isn't a runtime dep. Use `npm install --no-save puppeteer-core` to set up.
