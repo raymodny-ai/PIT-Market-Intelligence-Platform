@@ -1,0 +1,66 @@
+# =============================================================================
+# PIT Market Intelligence — Web (Next.js) image
+# Multi-stage build: deps → build → runtime.
+# Targets Node 20 (matches Next.js 14.2 LTS), exposes 3000 by default.
+#
+# Build:    docker build -f docker/Dockerfile.web -t pit-market/web:dev .
+# Run:      docker run --rm -p 8701:3000 \
+#             -e NEXT_PUBLIC_API_BASE=http://127.0.0.1:8700 \
+#             pit-market/web:dev
+# =============================================================================
+
+# ---- Stage 1: install deps ----
+FROM node:20-bookworm-slim AS deps
+WORKDIR /opt/pit/web
+
+# Copy package files only — npm ci is faster + deterministic when lockfile exists.
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN if [ -f package-lock.json ]; then \
+      npm ci --legacy-peer-deps --no-audit --no-fund; \
+    else \
+      npm install --legacy-peer-deps --no-audit --no-fund; \
+    fi
+
+# ---- Stage 2: build ----
+FROM node:20-bookworm-slim AS build
+WORKDIR /opt/pit/web
+
+# NEXT_PUBLIC_API_BASE is inlined into the bundle at build time.
+# Default to the host-side FastAPI port (8700 on local NAS) so that the
+# rewrite proxy target is correct without any runtime env wiring.
+ARG NEXT_PUBLIC_API_BASE=http://127.0.0.1:8700
+ENV NEXT_PUBLIC_API_BASE=${NEXT_PUBLIC_API_BASE} \
+    NEXT_TELEMETRY_DISABLED=1
+
+COPY --from=deps /opt/pit/web/node_modules ./node_modules
+COPY frontend ./
+
+RUN npm run build
+
+# ---- Stage 3: runtime ----
+FROM node:20-bookworm-slim AS runtime
+WORKDIR /opt/pit/web
+
+ENV NODE_ENV=production \
+    NEXT_TELEMETRY_DISABLED=1 \
+    PORT=3000 \
+    HOSTNAME=0.0.0.0
+
+# Non-root user — match numeric uid for NAS volume compatibility.
+RUN groupadd --system --gid 1001 pit \
+    && useradd --system --uid 1001 --gid pit --home /opt/pit/web pit
+
+# Bring only the production node_modules + build artifacts.
+COPY --from=build --chown=pit:pit /opt/pit/web/node_modules ./node_modules
+COPY --from=build --chown=pit:pit /opt/pit/web/.next ./.next
+COPY --from=build --chown=pit:pit /opt/pit/web/public ./public
+COPY --from=build --chown=pit:pit /opt/pit/web/package.json ./package.json
+COPY --from=build --chown=pit:pit /opt/pit/web/next.config.mjs ./next.config.mjs
+
+USER pit
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:3000/ || exit 1
+
+CMD ["npm", "run", "start"]

@@ -1,0 +1,62 @@
+# =============================================================================
+# PIT Market Intelligence Platform — Docker Compose (dev profile)
+# Minimal local stack: API + Web only. No Redis / Postgres / MinIO / Dagster.
+# This complements the full prod compose (docker-compose.yml, Phase 5 stack).
+#
+# Bring up:    docker compose -f docker-compose.dev.yml up -d
+# Verify:      curl http://127.0.0.1:8700/health   (API)
+#              curl http://127.0.0.1:8701/         (Web)
+# Teardown:    docker compose -f docker-compose.dev.yml down -v
+# =============================================================================
+
+x-pit-env: &pit-env
+  PIT_CONFIG_DIR: /opt/pit/app/config
+  PIT_MARKET_DATA: /opt/pit/app/data
+  PIT_MARKET_CACHE_BACKEND: cachetools
+  PYTHONIOENCODING: utf-8
+
+services:
+  # --- Core API ---
+  pit-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.api
+    image: pit-market/api:dev
+    container_name: pit-api
+    command: ["uvicorn", "pit_market.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      <<: *pit-env
+    ports:
+      - "8700:8000"
+    volumes:
+      - ./config:/opt/pit/app/config:ro
+      - ./data:/opt/pit/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # --- Web (Next.js) ---
+  pit-web:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.web
+      args:
+        NEXT_PUBLIC_API_BASE: http://127.0.0.1:8700
+    image: pit-market/web:dev
+    container_name: pit-web
+    environment:
+      NEXT_PUBLIC_API_BASE: http://127.0.0.1:8700
+    ports:
+      - "8701:3000"
+    depends_on:
+      pit-api:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

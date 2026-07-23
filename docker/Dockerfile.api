@@ -1,0 +1,57 @@
+# =============================================================================
+# PIT Market Intelligence — API image
+# Single-stage build using uv for fast, deterministic installs.
+# Targets Python 3.12, exposes 8000, runs uvicorn against pit_market.api.main.
+# Build:    docker build -f docker/Dockerfile.api -t pit-market/api:dev .
+# Run:      docker run --rm -p 8700:8000 \
+#             -e PIT_CONFIG_DIR=/opt/pit/app/config \
+#             -e PIT_MARKET_DATA=/opt/pit/app/data \
+#             -v $PWD/config:/opt/pit/app/config:ro \
+#             -v $PWD/data:/opt/pit/app/data \
+#             pit-market/api:dev
+# =============================================================================
+FROM python:3.12-slim AS base
+
+# uv 0.5+ ships a single static binary — install it from the official image.
+COPY --from=ghcr.io/astral-sh/uv:0.5.11 /uv /uvx /usr/local/bin/
+
+# System deps: build-essential for any wheels that need a compiler, curl for
+# healthchecks, git in case pyproject references git URLs.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        curl \
+        git \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/pit/app
+
+# Layer cache: copy only the manifests first so that dep changes invalidate
+# only the uv sync layer. uv's own cache lives in /root/.cache/uv.
+# (No uv.lock yet — uv generates one on first sync.)
+COPY pyproject.toml ./
+
+# Install runtime + the optional groups the API actually uses.
+# We deliberately exclude 'dev' (test deps) to keep the image lean.
+# 'etl' brings yfinance; 'llm' brings openai/google-generativeai for analyze.
+RUN uv sync --no-dev --extra etl --extra llm \
+    && uv cache prune --ci
+
+# Now copy the application source.
+COPY src ./src
+COPY config ./config
+
+ENV PATH="/opt/pit/app/.venv/bin:$PATH" \
+    PYTHONPATH=/opt/pit/app/src \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+EXPOSE 8000
+
+# A read-only filesystem-friendly healthcheck; the uvicorn process is the
+# signal of life. Matches the docker-compose.yml healthcheck.test.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:8000/health || exit 1
+
+CMD ["uvicorn", "pit_market.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
